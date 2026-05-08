@@ -84,6 +84,7 @@ class CashFlowAnalyzer:
             "next_30_orders": next_30.sort_values("due_date"),
             "forecast_inflow_orders": forecast_inflow.sort_values("due_date") if not forecast_inflow.empty else forecast_inflow,
             "client_risk": self._client_risk(collectible),
+            "client_payment_terms": self._client_payment_terms(df, collectible, today),
             "data_confidence": confidence,
         }
 
@@ -154,6 +155,106 @@ class CashFlowAnalyzer:
             axis=1,
         )
         return grouped.sort_values(["risk_level", "pending_amount"], ascending=[False, False])
+
+    @staticmethod
+    def _client_payment_terms(all_invoices: pd.DataFrame, collectible: pd.DataFrame, today: pd.Timestamp) -> pd.DataFrame:
+        if all_invoices is None or all_invoices.empty:
+            return pd.DataFrame()
+
+        work = all_invoices.copy()
+        work["invoice_base_date"] = work["sent_date"].where(work["sent_date"].notna(), work["date_added"])
+        work["contract_payment_days"] = pd.to_numeric(work.get("payment_days"), errors="coerce")
+        work["actual_payment_days"] = (
+            pd.to_datetime(work.get("payment_received_date"), errors="coerce") - pd.to_datetime(work["invoice_base_date"], errors="coerce")
+        ).dt.days
+        work["actual_payment_days"] = work["actual_payment_days"].where(work["actual_payment_days"] >= 0)
+        work["is_received_full_or_partial"] = (
+            work.get("payment_received_date").notna()
+            & (pd.to_numeric(work.get("payment_received"), errors="coerce").fillna(0) > 0)
+        )
+
+        paid = work[work["is_received_full_or_partial"] & work["actual_payment_days"].notna()].copy()
+        contract = work[work["contract_payment_days"].notna() & (work["contract_payment_days"] >= 0)].copy()
+
+        frames = []
+        if not contract.empty:
+            contract_grouped = (
+                contract.groupby("client_name", dropna=False)
+                .agg(
+                    invoice_count=("invoice_id", "count"),
+                    contract_avg_days=("contract_payment_days", "mean"),
+                    contract_median_days=("contract_payment_days", "median"),
+                    contract_min_days=("contract_payment_days", "min"),
+                    contract_max_days=("contract_payment_days", "max"),
+                )
+                .reset_index()
+            )
+            frames.append(contract_grouped)
+        if not paid.empty:
+            paid_grouped = (
+                paid.groupby("client_name", dropna=False)
+                .agg(
+                    paid_invoice_count=("invoice_id", "count"),
+                    actual_avg_days=("actual_payment_days", "mean"),
+                    actual_median_days=("actual_payment_days", "median"),
+                    actual_min_days=("actual_payment_days", "min"),
+                    actual_max_days=("actual_payment_days", "max"),
+                )
+                .reset_index()
+            )
+            frames.append(paid_grouped)
+
+        if not frames:
+            result = pd.DataFrame({"client_name": sorted(work["client_name"].dropna().astype(str).unique().tolist())})
+        else:
+            result = frames[0]
+            for frame in frames[1:]:
+                result = result.merge(frame, on="client_name", how="outer")
+
+        if collectible is not None and not collectible.empty:
+            open_grouped = (
+                collectible.groupby("client_name", dropna=False)
+                .agg(
+                    open_invoice_count=("invoice_id", "count"),
+                    pending_amount=("pending_amount", "sum"),
+                    overdue_count=("is_overdue", "sum"),
+                    max_overdue_days=("overdue_days", "max"),
+                )
+                .reset_index()
+            )
+            result = result.merge(open_grouped, on="client_name", how="outer")
+
+        for col in ["actual_avg_days", "contract_avg_days"]:
+            if col not in result.columns:
+                result[col] = pd.NA
+        result["terms_gap_days"] = result.get("actual_avg_days") - result.get("contract_avg_days")
+        result["payment_behavior"] = result["terms_gap_days"].apply(
+            lambda x: "慢于合同" if pd.notna(x) and x > 7 else "快于合同" if pd.notna(x) and x < -7 else "接近合同" if pd.notna(x) else "缺少实收样本"
+        )
+        numeric_cols = [
+            "invoice_count",
+            "contract_avg_days",
+            "contract_median_days",
+            "contract_min_days",
+            "contract_max_days",
+            "paid_invoice_count",
+            "actual_avg_days",
+            "actual_median_days",
+            "actual_min_days",
+            "actual_max_days",
+            "terms_gap_days",
+            "open_invoice_count",
+            "pending_amount",
+            "overdue_count",
+            "max_overdue_days",
+        ]
+        for col in numeric_cols:
+            if col in result.columns:
+                result[col] = pd.to_numeric(result[col], errors="coerce")
+        sort_cols = [col for col in ["terms_gap_days", "pending_amount"] if col in result.columns]
+        if sort_cols:
+            result = result.sort_values(sort_cols, ascending=[False] * len(sort_cols))
+        return result.reset_index(drop=True)
 
     @staticmethod
     def _risk_level(overdue_rate: float, runway: object) -> str:

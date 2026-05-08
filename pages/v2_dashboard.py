@@ -1196,6 +1196,30 @@ def render_cashflow(context: Dict[str, object]) -> None:
     st.markdown("#### 客户回款风险画像")
     st.dataframe(safe_df(cashflow["client_risk"]), use_container_width=True, hide_index=True)
 
+    st.markdown("#### 客户合同账期 vs 真实平均账期")
+    terms = cashflow.get("client_payment_terms", pd.DataFrame())
+    if terms.empty:
+        st.info("暂无可计算账期的数据。需要发票日期、合同账期和实际回款日期。")
+    else:
+        display_cols = [
+            "client_name",
+            "invoice_count",
+            "contract_avg_days",
+            "contract_median_days",
+            "paid_invoice_count",
+            "actual_avg_days",
+            "actual_median_days",
+            "terms_gap_days",
+            "payment_behavior",
+            "open_invoice_count",
+            "pending_amount",
+            "overdue_count",
+            "max_overdue_days",
+        ]
+        existing = [col for col in display_cols if col in terms.columns]
+        st.caption("真实账期 = 实际回款日期 - 发票发送日；如果没有发送日，则使用发票创建日。账期差 = 真实平均账期 - 合同平均账期。")
+        st.dataframe(safe_df(terms[existing]), use_container_width=True, hide_index=True)
+
 
 def render_recommendations(context: Dict[str, object]) -> None:
     st.markdown("### 经营诊断与决策建议")

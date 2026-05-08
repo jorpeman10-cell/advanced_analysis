@@ -68,6 +68,28 @@ def _option_index(options: List[str], value: str, default: int = 0) -> int:
     return options.index(value) if value in options else default
 
 
+def _visible_secret_keys() -> List[str]:
+    try:
+        secret_values = st.secrets
+    except Exception:
+        return []
+    keys: List[str] = []
+
+    def walk(node, prefix: str = "") -> None:
+        try:
+            items = list(node.items())
+        except Exception:
+            return
+        for key, value in items:
+            name = f"{prefix}.{key}" if prefix else str(key)
+            keys.append(name)
+            if hasattr(value, "items") or isinstance(value, dict):
+                walk(value, name)
+
+    walk(secret_values)
+    return keys
+
+
 def render_decision_agent(context: Dict[str, object]) -> None:
     st.markdown("### 经营决策 Agent")
     st.caption(
@@ -176,6 +198,9 @@ def _render_agent_console(context: Dict[str, object], issues: List[Dict[str, obj
             st.success(f"已自动读取模型 Key：{stored_source} / {_masked_key(stored_key)}")
         else:
             st.warning("未读取到默认 API Key。请在 Streamlit Secrets 配置 MOONSHOT_API_KEY，或临时填写下方覆盖 Key。")
+            visible_keys = _visible_secret_keys()
+            if visible_keys:
+                st.caption("当前可见 Secrets 键名（不显示值）： " + ", ".join(visible_keys[:30]))
         st.info("经营 Agent 已设为强模型模式：工具只负责取数和证据，最终回答必须由 LLM 生成。")
         api_key = st.text_input(
             "API Key 覆盖（可选）",

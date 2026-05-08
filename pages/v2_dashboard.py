@@ -45,6 +45,28 @@ AI_PROVIDER_PRESETS = {
 }
 
 
+def _secret_lookup(secret_values, names: list[str]) -> tuple[str, str]:
+    wanted = {name.strip().lower(): name for name in names}
+
+    def walk(node, path: str = "secrets") -> tuple[str, str]:
+        try:
+            items = list(node.items())
+        except Exception:
+            return "", ""
+        for key, value in items:
+            key_text = str(key).strip()
+            next_path = f"{path}.{key_text}"
+            if key_text.lower() in wanted and value:
+                return str(value).strip(), next_path
+            if hasattr(value, "items") or isinstance(value, dict):
+                found, source = walk(value, next_path)
+                if found:
+                    return found, source
+        return "", ""
+
+    return walk(secret_values)
+
+
 def _get_ai_api_key(provider: str, typed_key: str) -> tuple[str, str]:
     typed_key = (typed_key or "").strip()
     if typed_key:
@@ -63,12 +85,10 @@ def _get_ai_api_key(provider: str, typed_key: str) -> tuple[str, str]:
         value = os.getenv(name, "")
         if value:
             return value.strip(), f"env:{name}"
-        try:
-            value = secret_values.get(name, "")
-        except Exception:
-            value = ""
-        if value:
-            return str(value).strip(), f"secrets:{name}"
+
+    value, source = _secret_lookup(secret_values, env_names)
+    if value:
+        return value, source
 
     return "", ""
 

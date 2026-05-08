@@ -52,6 +52,7 @@ DEFAULT_AGENT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_AGENT_TEMPERATURE = 1.0
 DEFAULT_AGENT_MAX_TOKENS = 3200
 DEFAULT_AGENT_TIMEOUT = 90
+AGENT_CONFIG_VERSION = "agent-config-2026-05-08-v2"
 
 
 def _init_agent_config_defaults() -> None:
@@ -136,6 +137,7 @@ def _render_action_queue(conversion, cost, cashflow) -> None:
 def _render_agent_console(context: Dict[str, object], issues: List[Dict[str, object]]) -> None:
     st.markdown("#### 对话式经营分析")
     _init_agent_config_defaults()
+    st.caption(f"Agent config version: {AGENT_CONFIG_VERSION} | 默认自动读取 MOONSHOT_API_KEY，页面 Key 仅作临时覆盖")
 
     provider_names = list(AI_PROVIDER_PRESETS.keys())
     saved_provider = st.session_state.get("decision_agent_provider", DEFAULT_AGENT_PROVIDER)
@@ -287,6 +289,9 @@ def _run_agent_turn(
 ) -> None:
     st.session_state["decision_agent_messages"].append({"role": "user", "content": question})
     key, key_source = _get_ai_api_key(provider, api_key)
+    if not key:
+        default_provider = st.session_state.get("decision_agent_provider", DEFAULT_AGENT_PROVIDER)
+        key, key_source = _get_ai_api_key(default_provider, "")
     if not key:
         st.session_state["decision_agent_messages"].append(
             {

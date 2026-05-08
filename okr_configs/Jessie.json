@@ -1,0 +1,58 @@
+{
+  "name": "Jessie",
+  "chinese_name": "胡婷",
+  "level": "SM",
+  "team": "CMC/生产",
+  "manager": "Steven",
+  "base_bonus": 1000.0,
+  "rules": [
+    {
+      "name": "达成年度边际贡献率（预算）",
+      "target_desc": "0.6",
+      "weight": 0.3,
+      "period": "quarterly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [],
+      "base_amount": 300.0
+    },
+    {
+      "name": "职位成功率15%",
+      "target_desc": "0.6",
+      "weight": 0.25,
+      "period": "quarterly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [],
+      "base_amount": 250.0
+    },
+    {
+      "name": "数据Mapping 计划达成",
+      "target_desc": "系统Mapping",
+      "weight": 0.25,
+      "period": "monthly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [],
+      "base_amount": 250.0
+    },
+    {
+      "name": "客户满意度",
+      "target_desc": "职位推荐率90%",
+      "weight": 0.2,
+      "period": "monthly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [],
+      "base_amount": 200.0
+    }
+  ]
+}

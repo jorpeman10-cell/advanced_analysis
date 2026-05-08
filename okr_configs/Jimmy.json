@@ -1,0 +1,199 @@
+{
+  "name": "Jimmy",
+  "chinese_name": "郝志杰",
+  "level": "ACI",
+  "team": "临床",
+  "manager": "Vivien",
+  "base_bonus": 1000.0,
+  "rules": [
+    {
+      "name": "电话量/周",
+      "target_desc": "60个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 50.0,
+          "max": 60.0,
+          "bonus": 50.0
+        },
+        {
+          "min": 60.0,
+          "bonus": 100.0
+        },
+        {
+          "max": 50.0,
+          "bonus": 0.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "电话量/周",
+      "target_desc": "60个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 50.0,
+          "max": 60.0,
+          "bonus": 50.0
+        },
+        {
+          "min": 60.0,
+          "bonus": 100.0
+        },
+        {
+          "max": 50.0,
+          "bonus": 0.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "电话量/周",
+      "target_desc": "60个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 50.0,
+          "max": 60.0,
+          "bonus": 50.0
+        },
+        {
+          "min": 60.0,
+          "bonus": 100.0
+        },
+        {
+          "max": 50.0,
+          "bonus": 0.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "电话量/周",
+      "target_desc": "60个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 50.0,
+          "max": 60.0,
+          "bonus": 50.0
+        },
+        {
+          "min": 60.0,
+          "bonus": 100.0
+        },
+        {
+          "max": 50.0,
+          "bonus": 0.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "推荐+面试量/周",
+      "target_desc": "4个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "推荐+面试量/周",
+      "target_desc": "4个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "推荐+面试量/周",
+      "target_desc": "4个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "推荐+面试量/周",
+      "target_desc": "4个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "候选人拜访",
+      "target_desc": "2个/月",
+      "weight": 0.2,
+      "period": "monthly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 1.0,
+          "bonus": 200.0
+        }
+      ],
+      "base_amount": 200.0
+    }
+  ]
+}

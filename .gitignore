@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Local runtime data
+config/*.json
+cache/
+reports/
+*.pdf
+*_screenshot.png
+report_requests.json
+alert_config.json
+auth_config.json
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

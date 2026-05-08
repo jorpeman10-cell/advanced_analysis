@@ -1,0 +1,214 @@
+{
+  "name": "Amber",
+  "chinese_name": "于肖肖",
+  "level": "PCII",
+  "team": "RA",
+  "manager": "Vivien",
+  "base_bonus": 1000.0,
+  "rules": [
+    {
+      "name": "BD list",
+      "target_desc": "3个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 25.0
+        },
+        {
+          "min": 3.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "BD list",
+      "target_desc": "3个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 25.0
+        },
+        {
+          "min": 3.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "BD list",
+      "target_desc": "3个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 25.0
+        },
+        {
+          "min": 3.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "BD list",
+      "target_desc": "3个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 25.0
+        },
+        {
+          "min": 3.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "New case in",
+      "target_desc": "3个case in/月",
+      "weight": 0.3,
+      "period": "monthly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 300.0
+        }
+      ],
+      "base_amount": 300.0
+    },
+    {
+      "name": "组织架构/人选变动",
+      "target_desc": "5个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 3.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "组织架构/人选变动",
+      "target_desc": "5个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 3.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "组织架构/人选变动",
+      "target_desc": "5个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 3.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "组织架构/人选变动",
+      "target_desc": "5个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 3.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "推荐量",
+      "target_desc": "15/月",
+      "weight": 0.3,
+      "period": "monthly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 11.0,
+          "bonus": 150.0
+        },
+        {
+          "min": 14.0,
+          "bonus": 200.0
+        },
+        {
+          "min": 15.0,
+          "bonus": 300.0
+        },
+        {
+          "min": 9.0,
+          "max": 11.0,
+          "bonus": 150.0
+        },
+        {
+          "min": 12.0,
+          "max": 14.0,
+          "bonus": 200.0
+        }
+      ],
+      "base_amount": 300.0
+    }
+  ]
+}

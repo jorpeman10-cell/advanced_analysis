@@ -1,0 +1,34 @@
+{
+  "name": "Larry",
+  "chinese_name": "高一凡",
+  "level": "AD",
+  "team": "销售",
+  "manager": "Shawn",
+  "base_bonus": 1000.0,
+  "rules": [
+    {
+      "name": "团队OKR达成",
+      "target_desc": "团队成员周分数≥6",
+      "weight": 0.5,
+      "period": "quarterly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [],
+      "base_amount": 500.0
+    },
+    {
+      "name": "新客户BDcase",
+      "target_desc": "8个/月",
+      "weight": 0.5,
+      "period": "quarterly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [],
+      "base_amount": 500.0
+    }
+  ]
+}

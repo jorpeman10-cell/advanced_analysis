@@ -1,0 +1,58 @@
+{
+  "name": "Vivien",
+  "chinese_name": "赵婉玉",
+  "level": "SM",
+  "team": "临床",
+  "manager": "Steven",
+  "base_bonus": 1000.0,
+  "rules": [
+    {
+      "name": "达成年度边际贡献率(预算)",
+      "target_desc": "0.625",
+      "weight": 0.3,
+      "period": "quarterly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [],
+      "base_amount": 900.0
+    },
+    {
+      "name": "新客户业绩",
+      "target_desc": "季度占整体20%",
+      "weight": 0.25,
+      "period": "quarterly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [],
+      "base_amount": 900.0
+    },
+    {
+      "name": "新领域（RA/Medical/PV)",
+      "target_desc": "2个offer",
+      "weight": 0.25,
+      "period": "quarterly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [],
+      "base_amount": 250.0
+    },
+    {
+      "name": "客户满意度",
+      "target_desc": "职位推荐率90%",
+      "weight": 0.2,
+      "period": "monthly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [],
+      "base_amount": 200.0
+    }
+  ]
+}

@@ -1,0 +1,248 @@
+{
+  "name": "Vimber",
+  "chinese_name": "魏菲",
+  "level": "SCI",
+  "team": "",
+  "manager": "",
+  "base_bonus": 1000.0,
+  "rules": [
+    {
+      "name": "推荐量/周",
+      "target_desc": "4个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 4.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "推荐量/周",
+      "target_desc": "4个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 4.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "推荐量/周",
+      "target_desc": "4个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 4.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "推荐量/周",
+      "target_desc": "4个/周",
+      "weight": 0.1,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 4.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "NJO",
+      "target_desc": "5个/月",
+      "weight": 0.05,
+      "period": "monthly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 4.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "BD Call",
+      "target_desc": "5个/月",
+      "weight": 0.05,
+      "period": "monthly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 5.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "F2F见候选人",
+      "target_desc": "2个/周",
+      "weight": 0.075,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "F2F见候选人",
+      "target_desc": "2个/周",
+      "weight": 0.075,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "F2F见候选人",
+      "target_desc": "2个/周",
+      "weight": 0.075,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "F2F见候选人",
+      "target_desc": "2个/周",
+      "weight": 0.075,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 100.0
+        }
+      ],
+      "base_amount": 100.0
+    },
+    {
+      "name": "市场信息收集+BD List",
+      "target_desc": "2个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "市场信息收集+BD List",
+      "target_desc": "2个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "市场信息收集+BD List",
+      "target_desc": "2个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    },
+    {
+      "name": "市场信息收集+BD List",
+      "target_desc": "2个/周",
+      "weight": 0.05,
+      "period": "weekly",
+      "score_rules": {},
+      "threshold_no_bonus": 0,
+      "threshold_half_bonus": 0,
+      "threshold_full_bonus": 0,
+      "tier_rules": [
+        {
+          "min": 2.0,
+          "bonus": 50.0
+        }
+      ],
+      "base_amount": 50.0
+    }
+  ]
+}

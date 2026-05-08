@@ -74,7 +74,7 @@ def _get_ai_api_key(provider: str, typed_key: str) -> tuple[str, str]:
 
     env_names = ["OPENAI_API_KEY"]
     if provider.startswith("Kimi / Moonshot"):
-        env_names = ["MOONSHOT_API_KEY", "KIMI_API_KEY", "OPENAI_API_KEY"]
+        env_names = ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
 
     try:
         secret_values = st.secrets

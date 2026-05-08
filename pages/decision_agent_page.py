@@ -90,6 +90,15 @@ def _visible_secret_keys() -> List[str]:
     return keys
 
 
+def _alternate_kimi_base_url(base_url: str) -> str:
+    current = (base_url or "").rstrip("/")
+    if current == "https://api.moonshot.cn/v1":
+        return "https://api.moonshot.ai/v1"
+    if current == "https://api.moonshot.ai/v1":
+        return "https://api.moonshot.cn/v1"
+    return ""
+
+
 def render_decision_agent(context: Dict[str, object]) -> None:
     st.markdown("### 经营决策 Agent")
     st.caption(
@@ -340,15 +349,34 @@ def _run_agent_turn(
     }
 
     try:
-        with st.spinner("Agent 正在选择工具、读取证据并调用模型生成判断..."):
-            result = run_business_agent(
-                question,
-                context,
-                selected_tools=selected_tools,
-                llm_config=llm_config,
-                chat_history=st.session_state["decision_agent_messages"],
-            )
-        source_text = f"\n\n`LLM called: provider={provider} | base_url={base_url} | model={model} | key_source={key_source or '-'} | key={_masked_key(key)}`"
+        used_base_url = base_url
+        try:
+            with st.spinner("Agent 正在选择工具、读取证据并调用模型生成判断..."):
+                result = run_business_agent(
+                    question,
+                    context,
+                    selected_tools=selected_tools,
+                    llm_config=llm_config,
+                    chat_history=st.session_state["decision_agent_messages"],
+                )
+        except Exception as first_exc:
+            retry_base_url = _alternate_kimi_base_url(base_url) if provider.startswith("Kimi / Moonshot") else ""
+            if "HTTP 401" not in str(first_exc) or not retry_base_url:
+                raise
+            retry_config = dict(llm_config)
+            retry_config["base_url"] = retry_base_url
+            with st.spinner("CN/Global 鉴权不匹配，正在切换 Moonshot Base URL 重试..."):
+                result = run_business_agent(
+                    question,
+                    context,
+                    selected_tools=selected_tools,
+                    llm_config=retry_config,
+                    chat_history=st.session_state["decision_agent_messages"],
+                )
+            used_base_url = retry_base_url
+            st.session_state["decision_agent_base_url"] = retry_base_url
+
+        source_text = f"\n\n`LLM called: provider={provider} | base_url={used_base_url} | model={model} | key_source={key_source or '-'} | key={_masked_key(key)}`"
         answer_text = f"**本次调用的 LLM 模型：{model}**\n\n{result['answer']}"
         st.session_state["decision_agent_messages"].append(
             {
@@ -359,10 +387,14 @@ def _run_agent_turn(
             }
         )
     except Exception as exc:
+        debug_text = (
+            f"\n\n`LLM failed: provider={provider} | base_url={base_url} | model={model} "
+            f"| key_source={key_source or '-'} | key={_masked_key(key)}`"
+        )
         st.session_state["decision_agent_messages"].append(
             {
                 "role": "assistant",
-                "content": f"Agent 生成失败：{exc}\n\n问题已保留。请检查模型 Key、Base URL、模型名或 token 限制后重试。",
+                "content": f"Agent 生成失败：{exc}\n\n问题已保留。请检查模型 Key、Base URL、模型名或 token 限制后重试。{debug_text}",
             }
         )
 

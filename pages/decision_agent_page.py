@@ -99,6 +99,12 @@ def _alternate_kimi_base_url(base_url: str) -> str:
     return ""
 
 
+def _kimi_fallback_models(model: str) -> List[str]:
+    current = (model or "").strip()
+    candidates = ["kimi-k2-turbo-preview", "kimi-k2-thinking-turbo", "kimi-k2.5"]
+    return [item for item in candidates if item and item != current]
+
+
 def render_decision_agent(context: Dict[str, object]) -> None:
     st.markdown("### 经营决策 Agent")
     st.caption(
@@ -350,6 +356,7 @@ def _run_agent_turn(
 
     try:
         used_base_url = base_url
+        used_model = model
         try:
             with st.spinner("Agent 正在选择工具、读取证据并调用模型生成判断..."):
                 result = run_business_agent(
@@ -360,6 +367,42 @@ def _run_agent_turn(
                     chat_history=st.session_state["decision_agent_messages"],
                 )
         except Exception as first_exc:
+            if "HTTP 429" in str(first_exc) and provider.startswith("Kimi / Moonshot"):
+                last_exc = first_exc
+                for fallback_model in _kimi_fallback_models(model):
+                    retry_config = dict(llm_config)
+                    retry_config["model"] = fallback_model
+                    try:
+                        with st.spinner(f"{model} 当前过载，正在切换到 {fallback_model} 重试..."):
+                            result = run_business_agent(
+                                question,
+                                context,
+                                selected_tools=selected_tools,
+                                llm_config=retry_config,
+                                chat_history=st.session_state["decision_agent_messages"],
+                            )
+                        used_model = fallback_model
+                        st.session_state["decision_agent_model"] = fallback_model
+                        break
+                    except Exception as retry_exc:
+                        last_exc = retry_exc
+                else:
+                    raise last_exc
+                source_text = (
+                    f"\n\n`LLM called: provider={provider} | base_url={used_base_url} | model={used_model} "
+                    f"| fallback_from={model} | key_source={key_source or '-'} | key={_masked_key(key)}`"
+                )
+                answer_text = f"**本次调用的 LLM 模型：{used_model}**\n\n{result['answer']}"
+                st.session_state["decision_agent_messages"].append(
+                    {
+                        "role": "assistant",
+                        "content": answer_text + source_text,
+                        "tools": result.get("tools", []),
+                        "evidence": result.get("evidence", []),
+                    }
+                )
+                return
+
             retry_base_url = _alternate_kimi_base_url(base_url) if provider.startswith("Kimi / Moonshot") else ""
             if "HTTP 401" not in str(first_exc) or not retry_base_url:
                 raise
@@ -372,12 +415,12 @@ def _run_agent_turn(
                     selected_tools=selected_tools,
                     llm_config=retry_config,
                     chat_history=st.session_state["decision_agent_messages"],
-                )
+            )
             used_base_url = retry_base_url
             st.session_state["decision_agent_base_url"] = retry_base_url
 
-        source_text = f"\n\n`LLM called: provider={provider} | base_url={used_base_url} | model={model} | key_source={key_source or '-'} | key={_masked_key(key)}`"
-        answer_text = f"**本次调用的 LLM 模型：{model}**\n\n{result['answer']}"
+        source_text = f"\n\n`LLM called: provider={provider} | base_url={used_base_url} | model={used_model} | key_source={key_source or '-'} | key={_masked_key(key)}`"
+        answer_text = f"**本次调用的 LLM 模型：{used_model}**\n\n{result['answer']}"
         st.session_state["decision_agent_messages"].append(
             {
                 "role": "assistant",

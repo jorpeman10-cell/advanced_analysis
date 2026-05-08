@@ -177,18 +177,23 @@ def render_sidebar() -> tuple[dict, pd.DataFrame]:
 
     st.sidebar.markdown("---")
     st.sidebar.caption("顾问成本必须上传工资表；不再使用默认薪资。运营/系统账号会自动排除出顾问分析。")
-    salary_file = st.sidebar.file_uploader("顾问工资表", type=["xlsx", "xls", "csv"])
+    salary_file = st.sidebar.file_uploader("顾问薪资表", type=["xlsx", "xls", "csv"])
     if salary_file is not None:
         uploaded_salary_df = read_salary_file(salary_file)
         saved_count = save_salary_df(uploaded_salary_df)
         salary_df = load_salary_df()
-        st.sidebar.success(f"工资表已更新并记忆：{saved_count} 行")
+        st.session_state["current_salary_df"] = salary_df
+        st.sidebar.success(f"薪资表已更新并记忆：{saved_count} 行")
+    elif "current_salary_df" in st.session_state and not st.session_state["current_salary_df"].empty:
+        salary_df = st.session_state["current_salary_df"]
+        st.sidebar.success(f"已沿用当前薪资数据：{len(salary_df)} 行")
     else:
         salary_df = load_salary_df()
         if not salary_df.empty:
-            st.sidebar.success(f"已使用本地记忆薪资：{len(salary_df)} 行")
+            st.session_state["current_salary_df"] = salary_df
+            st.sidebar.success(f"已读取记忆薪资数据：{len(salary_df)} 行")
         else:
-            st.sidebar.warning("未找到本地薪资配置。顾问成本只展示收入，成本可信度为 Low。")
+            st.sidebar.warning("未找到薪资配置。顾问成本只展示收入，成本可信度为 Low。")
 
     if st.sidebar.button("刷新数据", use_container_width=True):
         load_v2_data.clear()

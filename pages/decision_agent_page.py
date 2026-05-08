@@ -46,6 +46,27 @@ AGENT_PROMPTS = [
 ]
 
 
+DEFAULT_AGENT_PROVIDER = "Kimi / Moonshot CN"
+DEFAULT_AGENT_MODEL = "kimi-k2.5"
+DEFAULT_AGENT_BASE_URL = "https://api.moonshot.cn/v1"
+DEFAULT_AGENT_TEMPERATURE = 1.0
+DEFAULT_AGENT_MAX_TOKENS = 3200
+DEFAULT_AGENT_TIMEOUT = 90
+
+
+def _init_agent_config_defaults() -> None:
+    st.session_state.setdefault("decision_agent_provider", DEFAULT_AGENT_PROVIDER)
+    st.session_state.setdefault("decision_agent_model", DEFAULT_AGENT_MODEL)
+    st.session_state.setdefault("decision_agent_base_url", DEFAULT_AGENT_BASE_URL)
+    st.session_state.setdefault("decision_agent_temperature", DEFAULT_AGENT_TEMPERATURE)
+    st.session_state.setdefault("decision_agent_max_tokens", DEFAULT_AGENT_MAX_TOKENS)
+    st.session_state.setdefault("decision_agent_timeout", DEFAULT_AGENT_TIMEOUT)
+
+
+def _option_index(options: List[str], value: str, default: int = 0) -> int:
+    return options.index(value) if value in options else default
+
+
 def render_decision_agent(context: Dict[str, object]) -> None:
     st.markdown("### 经营决策 Agent")
     st.caption(
@@ -114,47 +135,94 @@ def _render_action_queue(conversion, cost, cashflow) -> None:
 
 def _render_agent_console(context: Dict[str, object], issues: List[Dict[str, object]]) -> None:
     st.markdown("#### 对话式经营分析")
+    _init_agent_config_defaults()
+
+    provider_names = list(AI_PROVIDER_PRESETS.keys())
+    saved_provider = st.session_state.get("decision_agent_provider", DEFAULT_AGENT_PROVIDER)
+    if saved_provider not in provider_names:
+        saved_provider = DEFAULT_AGENT_PROVIDER if DEFAULT_AGENT_PROVIDER in provider_names else provider_names[0]
 
     with st.expander("模型与工具配置", expanded=False):
-        provider_names = list(AI_PROVIDER_PRESETS.keys())
         provider = st.selectbox(
             "服务商",
             provider_names,
-            index=provider_names.index(st.session_state.get("decision_agent_provider", "Kimi / Moonshot CN"))
-            if st.session_state.get("decision_agent_provider", "Kimi / Moonshot CN") in provider_names
-            else 0,
+            index=_option_index(provider_names, saved_provider),
             key="decision_agent_provider_select",
         )
         preset = AI_PROVIDER_PRESETS[provider]
         model_options = preset["models"] + (["自定义"] if "自定义" not in preset["models"] else [])
-        selected_model = st.selectbox("Model", model_options, index=0, key="decision_agent_model_select")
+        saved_model = st.session_state.get("decision_agent_model", DEFAULT_AGENT_MODEL)
+        selected_model = st.selectbox(
+            "Model",
+            model_options,
+            index=_option_index(model_options, saved_model),
+            key="decision_agent_model_select",
+        )
         model = (
             st.text_input("自定义 Model", value=st.session_state.get("decision_agent_custom_model", ""))
             if selected_model == "自定义"
             else selected_model
         )
-        base_url = st.text_input("Base URL", value=preset["base_url"], key="decision_agent_base_url")
+        base_url = st.text_input(
+            "Base URL",
+            value=st.session_state.get("decision_agent_base_url", preset["base_url"]),
+            key="decision_agent_base_url_input",
+        )
         use_llm = True
+        stored_key, stored_source = _get_ai_api_key(provider, "")
+        if stored_key:
+            st.success(f"已自动读取模型 Key：{stored_source} / {_masked_key(stored_key)}")
+        else:
+            st.warning("未读取到默认 API Key。请在 Streamlit Secrets 配置 MOONSHOT_API_KEY，或临时填写下方覆盖 Key。")
         st.info("经营 Agent 已设为强模型模式：工具只负责取数和证据，最终回答必须由 LLM 生成。")
-        api_key = st.text_input("API Key", value="", type="password", help="页面不保存密钥；也可以配置 MOONSHOT_API_KEY / OPENAI_API_KEY。")
+        api_key = st.text_input(
+            "API Key 覆盖（可选）",
+            value="",
+            type="password",
+            help="通常不用填写；默认读取 Streamlit Secrets / 环境变量中的 MOONSHOT_API_KEY。页面输入只作为临时覆盖，不写入文件。",
+        )
         col1, col2, col3 = st.columns(3)
         with col1:
-            temperature = st.number_input("Temperature", min_value=0.0, max_value=2.0, value=float(preset["temperature"]), step=0.1)
+            temperature = st.number_input(
+                "Temperature",
+                min_value=0.0,
+                max_value=2.0,
+                value=float(st.session_state.get("decision_agent_temperature", DEFAULT_AGENT_TEMPERATURE)),
+                step=0.1,
+            )
         with col2:
-            max_tokens = st.number_input("Max tokens", min_value=800, max_value=16000, value=max(3200, int(DEFAULT_MAX_TOKENS)), step=400)
+            max_tokens = st.number_input(
+                "Max tokens",
+                min_value=800,
+                max_value=16000,
+                value=int(st.session_state.get("decision_agent_max_tokens", max(3200, int(DEFAULT_MAX_TOKENS)))),
+                step=400,
+            )
         with col3:
-            timeout = st.number_input("Timeout seconds", min_value=30, max_value=600, value=max(90, int(DEFAULT_TIMEOUT)), step=30)
+            timeout = st.number_input(
+                "Timeout seconds",
+                min_value=30,
+                max_value=600,
+                value=int(st.session_state.get("decision_agent_timeout", max(90, int(DEFAULT_TIMEOUT)))),
+                step=30,
+            )
 
         auto_tools = st.toggle("Agent 自动选择工具", value=True)
         chosen_labels = st.multiselect(
             "手动指定工具",
             list(TOOL_OPTIONS.keys()),
-            default=["公司快照", "未来经营趋势", "现金流预测", "顾问成本"],
+            default=list(TOOL_OPTIONS.keys())[:4],
             disabled=auto_tools,
         )
 
     st.session_state["decision_agent_provider"] = provider
-    st.session_state["decision_agent_custom_model"] = model
+    st.session_state["decision_agent_model"] = model
+    st.session_state["decision_agent_custom_model"] = model if selected_model == "自定义" else st.session_state.get("decision_agent_custom_model", "")
+    st.session_state["decision_agent_base_url"] = base_url
+    st.session_state["decision_agent_temperature"] = float(temperature)
+    st.session_state["decision_agent_max_tokens"] = int(max_tokens)
+    st.session_state["decision_agent_timeout"] = int(timeout)
+
     if "decision_agent_messages" not in st.session_state:
         st.session_state["decision_agent_messages"] = []
 
@@ -219,16 +287,14 @@ def _run_agent_turn(
 ) -> None:
     st.session_state["decision_agent_messages"].append({"role": "user", "content": question})
     key, key_source = _get_ai_api_key(provider, api_key)
-    result = {"answer": ""}
     if not key:
-        answer_text = f"**本次调用的 LLM 模型：{model}**\n\n{result['answer']}"
         st.session_state["decision_agent_messages"].append(
             {
                 "role": "assistant",
                 "content": (
-                    "**未调用 LLM：没有读取到 API Key。**\n\n"
-                    "经营 Agent 当前是强模型模式，不会退回到简单工具调用。请在模型配置里填写 API Key，"
-                    "或配置 `MOONSHOT_API_KEY` / `OPENAI_API_KEY`。"
+                    f"**未调用 LLM：没有读取到 API Key。当前默认模型：{model}**\n\n"
+                    "经营 Agent 是强模型模式，不会退回到简单工具调用。请在 Streamlit Secrets 配置 "
+                    "`MOONSHOT_API_KEY`，或在模型配置中临时填写覆盖 Key。"
                 ),
             }
         )
@@ -244,7 +310,7 @@ def _run_agent_turn(
     }
 
     try:
-        with st.spinner("Agent 正在选择工具、读取证据并生成判断..."):
+        with st.spinner("Agent 正在选择工具、读取证据并调用模型生成判断..."):
             result = run_business_agent(
                 question,
                 context,
@@ -252,16 +318,6 @@ def _run_agent_turn(
                 llm_config=llm_config,
                 chat_history=st.session_state["decision_agent_messages"],
             )
-        if llm_config:
-            source_text = f"\n\n`LLM called: provider={provider} | base_url={base_url} | model={model} | key_source={key_source or '-'} | key={_masked_key(key)}`"
-            answer_text = f"**本次调用的 LLM 模型：{model}**\n\n{result['answer']}"
-        elif use_llm:
-            source_text = "\n\n`LLM not called: no API key was available. This answer used system tools only.`"
-            answer_text = f"**本次未调用 LLM 模型：未读取到 API Key。**\n\n{result['answer']}"
-        else:
-            source_text = "\n\n`模型综合判断未启用，本次只使用系统工具。`"
-        if "answer_text" not in locals():
-            answer_text = f"**LLM not called: model synthesis is disabled.**\n\n{result['answer']}"
         source_text = f"\n\n`LLM called: provider={provider} | base_url={base_url} | model={model} | key_source={key_source or '-'} | key={_masked_key(key)}`"
         answer_text = f"**本次调用的 LLM 模型：{model}**\n\n{result['answer']}"
         st.session_state["decision_agent_messages"].append(
@@ -276,7 +332,7 @@ def _run_agent_turn(
         st.session_state["decision_agent_messages"].append(
             {
                 "role": "assistant",
-                "content": f"Agent 生成失败：{exc}\n\n已保留你的问题，可以关闭模型综合判断后先看系统工具版回答。",
+                "content": f"Agent 生成失败：{exc}\n\n问题已保留。请检查模型 Key、Base URL、模型名或 token 限制后重试。",
             }
         )
 

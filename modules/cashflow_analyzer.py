@@ -178,14 +178,16 @@ class CashFlowAnalyzer:
 
         frames = []
         if not contract.empty:
+            contract_valid = contract[contract["contract_payment_days"] > 0].copy()
+            if contract_valid.empty:
+                contract_valid = contract.copy()
+            contract_valid["contract_payment_days"] = contract_valid["contract_payment_days"].round().astype("Int64")
             contract_grouped = (
-                contract.groupby("client_name", dropna=False)
+                contract_valid.groupby("client_name", dropna=False)
                 .agg(
                     invoice_count=("invoice_id", "count"),
-                    contract_avg_days=("contract_payment_days", "mean"),
-                    contract_median_days=("contract_payment_days", "median"),
-                    contract_min_days=("contract_payment_days", "min"),
-                    contract_max_days=("contract_payment_days", "max"),
+                    contract_payment_days=("contract_payment_days", lambda s: s.mode().iloc[0] if not s.mode().empty else pd.NA),
+                    contract_day_values=("contract_payment_days", lambda s: " / ".join(map(str, sorted(set(s.dropna().astype(int).tolist()))))),
                 )
                 .reset_index()
             )
@@ -224,19 +226,16 @@ class CashFlowAnalyzer:
             )
             result = result.merge(open_grouped, on="client_name", how="outer")
 
-        for col in ["actual_avg_days", "contract_avg_days"]:
+        for col in ["actual_avg_days", "contract_payment_days"]:
             if col not in result.columns:
                 result[col] = pd.NA
-        result["terms_gap_days"] = result.get("actual_avg_days") - result.get("contract_avg_days")
+        result["terms_gap_days"] = result.get("actual_avg_days") - result.get("contract_payment_days")
         result["payment_behavior"] = result["terms_gap_days"].apply(
             lambda x: "慢于合同" if pd.notna(x) and x > 7 else "快于合同" if pd.notna(x) and x < -7 else "接近合同" if pd.notna(x) else "缺少实收样本"
         )
         numeric_cols = [
             "invoice_count",
-            "contract_avg_days",
-            "contract_median_days",
-            "contract_min_days",
-            "contract_max_days",
+            "contract_payment_days",
             "paid_invoice_count",
             "actual_avg_days",
             "actual_median_days",

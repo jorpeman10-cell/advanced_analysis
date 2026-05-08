@@ -1204,8 +1204,8 @@ def render_cashflow(context: Dict[str, object]) -> None:
         display_cols = [
             "client_name",
             "invoice_count",
-            "contract_avg_days",
-            "contract_median_days",
+            "contract_payment_days",
+            "contract_day_values",
             "paid_invoice_count",
             "actual_avg_days",
             "actual_median_days",
@@ -1217,7 +1217,7 @@ def render_cashflow(context: Dict[str, object]) -> None:
             "max_overdue_days",
         ]
         existing = [col for col in display_cols if col in terms.columns]
-        st.caption("真实账期 = 实际回款日期 - 发票发送日；如果没有发送日，则使用发票创建日。账期差 = 真实平均账期 - 合同平均账期。")
+        st.caption("合同账期取客户合同/发票中的 payment_days 有效值，不做平均；真实账期 = 实际回款日期 - 发票发送日；账期差 = 真实平均账期 - 合同账期。")
         st.dataframe(safe_df(terms[existing]), use_container_width=True, hide_index=True)
 
 

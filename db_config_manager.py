@@ -137,6 +137,24 @@ def has_config() -> bool:
     return bool(config.get('username') and config.get('password'))
 
 
+def config_diagnostics() -> dict:
+    """Return non-sensitive deployment diagnostics for Streamlit Cloud."""
+    secrets_config = _load_streamlit_secrets_config()
+    config = load_db_config()
+    return {
+        "streamlit_secrets_loaded": bool(secrets_config),
+        "streamlit_secret_keys": sorted(secrets_config.keys()),
+        "local_config_file_exists": CONFIG_FILE.exists(),
+        "has_username": bool(config.get("username")),
+        "has_password": bool(config.get("password")),
+        "has_ssh_password": bool(config.get("ssh_password")),
+        "use_ssh": bool(config.get("use_ssh")),
+        "host": config.get("host", ""),
+        "database": config.get("database", ""),
+        "ssh_host": config.get("ssh_host", ""),
+    }
+
+
 def get_gllue_db_config():
     """返回 GllueDBConfig 对象"""
     from gllue_db_client import GllueDBConfig

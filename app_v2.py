@@ -207,6 +207,11 @@ def render_sidebar() -> tuple[dict, pd.DataFrame]:
 def main() -> None:
     st.title("猎头三速差模型 v2")
     if not db_config_manager.has_config():
+        st.info(
+            "Streamlit Cloud 不会读取本地 config/db_config.json。请在 App Settings -> Secrets 中配置 [gllue_db]，保存后 Reboot app。"
+        )
+        with st.expander("配置读取诊断（不显示密码）", expanded=True):
+            st.json(db_config_manager.config_diagnostics())
         st.error("数据库连接尚未配置。请先在原高级分析工具中完成数据库配置。")
         return
 

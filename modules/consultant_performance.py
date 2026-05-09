@@ -190,11 +190,19 @@ class ConsultantPerformanceAnalyzer:
             return pd.DataFrame()
         work = df.copy()
         work["name_key"] = work["consultant"].map(_norm_name)
-        for col in ["offer_count", "offer_amount", "paid_amount", "offer_to_onboard_rate", "offer_to_paid_rate"]:
+        for col in [
+            "offer_count",
+            "offer_amount",
+            "paid_amount",
+            "offer_unpaid_amount",
+            "offer_to_onboard_rate",
+            "offer_to_paid_rate",
+        ]:
             if col not in work.columns:
                 work[col] = 0.0
             work[col] = pd.to_numeric(work[col], errors="coerce").fillna(0.0)
-        work["offer_unpaid_amount"] = (work["offer_amount"] - work["paid_amount"]).clip(lower=0.0)
+        if "offer_unpaid_amount" not in df.columns:
+            work["offer_unpaid_amount"] = (work["offer_amount"] - work["paid_amount"]).clip(lower=0.0)
         return work
 
     @staticmethod

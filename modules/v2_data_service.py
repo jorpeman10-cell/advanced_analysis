@@ -823,24 +823,52 @@ class V2DataService:
         return pd.DataFrame(rows)
 
     def load_offer_outcome_metrics(self, start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
-        """Track same-period offers through onboard and payment outcomes."""
+        """Track current offer reserve with consultant revenue assignments.
+
+        Offer reserve is the business-stage amount still sitting in
+        ``invoice.status = 'Invoice Added'``. Consultant-level amounts must use
+        ``invoiceassignment.revenue`` so collaboration splits are respected.
+        Rejected/voided invoices are excluded by status and never enter unpaid
+        reserve.
+        """
         df = self.db_client.query(f"""
-            SELECT os.id AS offer_id, os.jobsubmission_id, js.joborder_id,
+            SELECT i.id AS offer_id, i.jobsubmission_id, i.joborder_id,
                    {_name_expr('u')} AS consultant, t.name AS team,
-                   os.signDate AS offer_date, os.revenue AS offer_amount,
-                   COALESCE(os.onboardDate, js.estimate_onboardDate) AS expected_onboard_date,
+                   COALESCE(i.sentDate, i.dateAdded) AS offer_date,
+                   ia.revenue AS offer_amount,
+                   0 AS paid_amount,
+                   js.estimate_onboardDate AS expected_onboard_date,
                    js.onboardDate AS actual_onboard_date,
-                   SUM(COALESCE(i.paymentReceived, 0)) AS paid_amount,
-                   MAX(i.paymentReceivedDate) AS paid_date
-            FROM offersign os
-            LEFT JOIN jobsubmission js ON os.jobsubmission_id = js.id
-            LEFT JOIN user u ON os.user_id = u.id
+                   NULL AS paid_date,
+                   i.status AS invoice_status
+            FROM invoiceassignment ia
+            JOIN invoice i ON ia.invoice_id = i.id
+            LEFT JOIN jobsubmission js ON i.jobsubmission_id = js.id
+            LEFT JOIN user u ON ia.user_id = u.id
             LEFT JOIN team t ON u.team_id = t.id
-            LEFT JOIN invoice i ON i.joborder_id = js.joborder_id
-            WHERE os.signDate >= '{start_date}' AND os.signDate <= '{end_date}'
-              AND os.active = 1
-            GROUP BY os.id, os.jobsubmission_id, js.joborder_id, consultant, t.name,
-                     os.signDate, os.revenue, COALESCE(os.onboardDate, js.estimate_onboardDate), js.onboardDate
+            WHERE i.status = 'Invoice Added'
+              AND COALESCE(i.active, 1) = 1
+              AND COALESCE(i.sentDate, i.dateAdded) >= '{start_date}'
+              AND COALESCE(i.sentDate, i.dateAdded) <= '{end_date}'
+            UNION ALL
+            SELECT i.id AS offer_id, i.jobsubmission_id, i.joborder_id,
+                   {_name_expr('u')} AS consultant, t.name AS team,
+                   i.paymentReceivedDate AS offer_date,
+                   0 AS offer_amount,
+                   ia.revenue AS paid_amount,
+                   js.estimate_onboardDate AS expected_onboard_date,
+                   js.onboardDate AS actual_onboard_date,
+                   i.paymentReceivedDate AS paid_date,
+                   i.status AS invoice_status
+            FROM invoiceassignment ia
+            JOIN invoice i ON ia.invoice_id = i.id
+            LEFT JOIN jobsubmission js ON i.jobsubmission_id = js.id
+            LEFT JOIN user u ON ia.user_id = u.id
+            LEFT JOIN team t ON u.team_id = t.id
+            WHERE i.status = 'Received'
+              AND COALESCE(i.active, 1) = 1
+              AND i.paymentReceivedDate >= '{start_date}'
+              AND i.paymentReceivedDate <= '{end_date}'
         """)
         if df.empty:
             empty = pd.DataFrame()
@@ -863,6 +891,7 @@ class V2DataService:
             ~has_expected_onboard & df["actual_onboard_date"].isna() & (df["offer_date"] <= onboard_mature_cutoff)
         )
         df["is_paid"] = df["paid_amount"] > 0
+        df["is_offer_reserve"] = df["invoice_status"].eq("Invoice Added")
         df["team"] = df["team"].fillna("(No Team)")
         df["consultant"] = df["consultant"].fillna("(No Consultant)")
 
@@ -881,30 +910,58 @@ class V2DataService:
     def _offer_outcome_group(df: pd.DataFrame, keys: list) -> pd.DataFrame:
         if df.empty:
             return pd.DataFrame()
+        reserve = df[df["is_offer_reserve"]].copy()
+        paid = df[df["is_paid"]].copy()
         if not keys:
             grouped = pd.DataFrame([{
-                "offer_count": int(df["offer_id"].nunique()),
-                "matured_offer_count": int(df["offer_onboard_matured"].sum()),
-                "pending_onboard_count": int((~df["offer_onboard_matured"]).sum()),
-                "offer_amount": float(df["offer_amount"].sum()),
-                "onboard_count": int(df["is_onboard"].sum()),
-                "paid_offer_count": int(df["is_paid"].sum()),
-                "paid_amount": float(df["paid_amount"].sum()),
+                "offer_count": int(reserve["offer_id"].nunique()),
+                "matured_offer_count": int(reserve["offer_onboard_matured"].sum()),
+                "pending_onboard_count": int((~reserve["offer_onboard_matured"]).sum()) if not reserve.empty else 0,
+                "offer_amount": float(reserve["offer_amount"].sum()),
+                "offer_unpaid_amount": float(reserve["offer_amount"].sum()),
+                "onboard_count": int(reserve["is_onboard"].sum()),
+                "paid_offer_count": int(paid["offer_id"].nunique()),
+                "paid_amount": float(paid["paid_amount"].sum()),
             }])
         else:
-            grouped = (
-                df.groupby(keys, dropna=False)
+            reserve_grouped = (
+                reserve.groupby(keys, dropna=False)
                 .agg(
                     offer_count=("offer_id", "nunique"),
                     matured_offer_count=("offer_onboard_matured", "sum"),
                     pending_onboard_count=("offer_onboard_matured", lambda x: int((~x).sum())),
                     offer_amount=("offer_amount", "sum"),
+                    offer_unpaid_amount=("offer_amount", "sum"),
                     onboard_count=("is_onboard", "sum"),
-                    paid_offer_count=("is_paid", "sum"),
+                )
+                .reset_index()
+                if not reserve.empty
+                else pd.DataFrame(columns=keys)
+            )
+            paid_grouped = (
+                paid.groupby(keys, dropna=False)
+                .agg(
+                    paid_offer_count=("offer_id", "nunique"),
                     paid_amount=("paid_amount", "sum"),
                 )
                 .reset_index()
+                if not paid.empty
+                else pd.DataFrame(columns=keys)
             )
+            grouped = reserve_grouped.merge(paid_grouped, on=keys, how="outer") if not reserve_grouped.empty else paid_grouped
+            for col in [
+                "offer_count",
+                "matured_offer_count",
+                "pending_onboard_count",
+                "offer_amount",
+                "offer_unpaid_amount",
+                "onboard_count",
+                "paid_offer_count",
+                "paid_amount",
+            ]:
+                if col not in grouped.columns:
+                    grouped[col] = 0
+                grouped[col] = pd.to_numeric(grouped[col], errors="coerce").fillna(0)
         grouped["offer_to_onboard_rate"] = grouped["onboard_count"] / grouped["matured_offer_count"].replace(0, pd.NA)
         grouped["offer_to_paid_rate"] = grouped["paid_offer_count"] / grouped["offer_count"].replace(0, pd.NA)
         grouped["paid_amount_per_offer_amount"] = grouped["paid_amount"] / grouped["offer_amount"].replace(0, pd.NA)

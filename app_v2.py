@@ -28,6 +28,9 @@ from pages.v2_dashboard import (
 )
 
 
+DATA_CACHE_VERSION = "2026-05-09-offer-unpaid-sent-v2"
+
+
 st.set_page_config(
     page_title="Three-Speed Model v2",
     page_icon="📊",
@@ -37,7 +40,7 @@ st.set_page_config(
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def load_v2_data(start_date: str, end_date: str, forecast_days: int):
+def load_v2_data(start_date: str, end_date: str, forecast_days: int, cache_version: str):
     db = GllueDBClient(db_config_manager.get_gllue_db_config())
     service = V2DataService(db)
     fiscal_start = f"{pd.to_datetime(end_date).year}-01-01"
@@ -114,6 +117,7 @@ def build_context(config: dict, salary_df: pd.DataFrame) -> dict:
         config["start_date"],
         config["end_date"],
         config["forecast_days"],
+        DATA_CACHE_VERSION,
     )
 
     active_process_df = filter_active_process_rows(process_df, consultants_df)

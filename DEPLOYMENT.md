@@ -63,6 +63,13 @@ ssh_host = "your_ssh_host"
 ssh_port = 22
 ssh_user = "your_ssh_user"
 ssh_password = "your_ssh_password"
+
+[consultant_salaries]
+"Lucy Wang" = 15000
+"Vivien Zhao" = 19000
+"Shawn Bian" = 36500
 ```
 
 If the database is behind SSH, make sure Streamlit Cloud can reach the SSH host and the database host allows the connection path.
+
+For salary data, `consultant_salaries` is a monthly salary mapping. If you do not upload a salary file in the app, v2 reads this Secrets section automatically after every reboot.

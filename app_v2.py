@@ -15,7 +15,7 @@ from modules.cost_analyzer import CostEfficiencyAnalyzer
 from modules.health_scorer import HealthScorer
 from modules.pipeline_analyzer import PipelineAnalyzer
 from modules.project_progress_analyzer import ProjectProgressAnalyzer
-from modules.salary_store import load_salary_df, save_salary_df
+from modules.salary_store import load_salary_df, normalize_salary_df, save_salary_df
 from modules.v2_data_service import V2DataService
 from pages.decision_agent_page import render_decision_agent
 from pages.v2_dashboard import (
@@ -63,6 +63,23 @@ def read_salary_file(uploaded_file) -> pd.DataFrame:
     if uploaded_file.name.lower().endswith(".csv"):
         return pd.read_csv(uploaded_file)
     return pd.read_excel(uploaded_file)
+
+
+def load_salary_df_from_secrets() -> pd.DataFrame:
+    try:
+        if "consultant_salaries" not in st.secrets:
+            return pd.DataFrame()
+        section = st.secrets["consultant_salaries"]
+        if isinstance(section, list):
+            return normalize_salary_df(pd.DataFrame(section))
+        data = dict(section)
+        rows = data.get("salaries")
+        if isinstance(rows, list):
+            return normalize_salary_df(pd.DataFrame(rows))
+        mapped_rows = [{"consultant": name, "base_salary": value} for name, value in data.items()]
+        return normalize_salary_df(pd.DataFrame(mapped_rows))
+    except Exception:
+        return pd.DataFrame()
 
 
 PROCESS_DEPARTED_EXCLUDES = (
@@ -192,12 +209,17 @@ def render_sidebar() -> tuple[dict, pd.DataFrame]:
         salary_df = st.session_state["current_salary_df"]
         st.sidebar.success(f"已沿用当前薪资数据：{len(salary_df)} 行")
     else:
-        salary_df = load_salary_df()
+        salary_df = load_salary_df_from_secrets()
         if not salary_df.empty:
             st.session_state["current_salary_df"] = salary_df
-            st.sidebar.success(f"已读取记忆薪资数据：{len(salary_df)} 行")
+            st.sidebar.success(f"已读取 Secrets 薪资数据：{len(salary_df)} 行")
         else:
-            st.sidebar.warning("未找到薪资配置。顾问成本只展示收入，成本可信度为 Low。")
+            salary_df = load_salary_df()
+            if not salary_df.empty:
+                st.session_state["current_salary_df"] = salary_df
+                st.sidebar.success(f"已读取记忆薪资数据：{len(salary_df)} 行")
+            else:
+                st.sidebar.warning("未找到薪资配置。顾问成本只展示收入，成本可信度为 Low。")
 
     if st.sidebar.button("刷新数据", use_container_width=True):
         load_v2_data.clear()

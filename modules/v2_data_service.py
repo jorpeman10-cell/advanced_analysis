@@ -338,14 +338,6 @@ class V2DataService:
             FROM invoice i
             WHERE i.status = 'Received'
               AND i.paymentReceivedDate >= '{start_date}' AND i.paymentReceivedDate <= '{end_date}'
-              AND i.joborder_id IN (
-                SELECT DISTINCT js.joborder_id
-                FROM offersign os
-                JOIN jobsubmission js ON os.jobsubmission_id = js.id
-                WHERE os.active = 1
-                  AND os.signDate >= '{start_date}'
-                  AND os.signDate <= '{end_date}'
-              )
         """)
         company_forecast = self.db_client.query(f"""
             SELECT 'Forecast' AS metric, COUNT(f.id) AS count_value,
@@ -492,14 +484,6 @@ class V2DataService:
             LEFT JOIN team t ON u.team_id = t.id
             WHERE i.status = 'Received'
               AND i.paymentReceivedDate >= '{start_date}' AND i.paymentReceivedDate <= '{end_date}'
-              AND i.joborder_id IN (
-                SELECT DISTINCT js.joborder_id
-                FROM offersign os
-                JOIN jobsubmission js ON os.jobsubmission_id = js.id
-                WHERE os.active = 1
-                  AND os.signDate >= '{start_date}'
-                  AND os.signDate <= '{end_date}'
-              )
             GROUP BY ia.user_id, consultant, t.name
         """)
         consultant_forecast = self.db_client.query(f"""
@@ -759,6 +743,21 @@ class V2DataService:
                   AND os.signDate <= '{end_date}'
               )
         """)
+        all_collection, all_collection_count = scalar(f"""
+            SELECT SUM(i.paymentReceived) AS amount, COUNT(DISTINCT i.id) AS count_value
+            FROM invoice i
+            WHERE i.status = 'Received'
+              AND i.paymentReceivedDate >= '{start_date}'
+              AND i.paymentReceivedDate <= '{end_date}'
+        """)
+        legacy_collection, legacy_collection_count = scalar(f"""
+            SELECT SUM(i.paymentReceived) AS amount, COUNT(DISTINCT i.id) AS count_value
+            FROM invoice i
+            WHERE i.status = 'Received'
+              AND i.paymentReceivedDate >= '{start_date}'
+              AND i.paymentReceivedDate <= '{end_date}'
+              AND COALESCE(i.sentDate, i.dateAdded) < '{start_date}'
+        """)
         same_day_offer, same_day_offer_count = scalar(f"""
             SELECT SUM(os.revenue) AS amount, COUNT(DISTINCT os.id) AS count_value
             FROM offersign os
@@ -778,8 +777,11 @@ class V2DataService:
             {"stage": "同日 Offer/Invoice Added 待确认", "amount": same_day_offer, "count": same_day_offer_count, "formula": "分析结束日同日生成 Offer 与 Invoice Added，需确认是否重复阶段归属"},
             {"stage": "26年新增 Invoice", "amount": current_sent, "count": current_sent_count, "formula": "Sent 发票且 joborder 有本期 Offer"},
             {"stage": "26年新增 Collection", "amount": current_collection, "count": current_collection_count, "formula": "Received 回款且 joborder 有本期 Offer"},
+            {"stage": "25年遗留 Collection", "amount": legacy_collection, "count": legacy_collection_count, "formula": "本期收到的历史发票回款"},
+            {"stage": "26年综合 Collection", "amount": all_collection, "count": all_collection_count, "formula": "本期收到的全部有效回款，用于现金和顾问表现分析"},
             {"stage": "26年三项汇总-不含待确认", "amount": current_offer_added + current_sent + current_collection, "count": current_offer_added_count + current_sent_count + current_collection_count, "formula": "Offer-已生成 Invoice Added + Invoice + Collection"},
             {"stage": "26年三项汇总-含待确认", "amount": current_offer_added + same_day_offer + current_sent + current_collection, "count": current_offer_added_count + same_day_offer_count + current_sent_count + current_collection_count, "formula": "用于对齐系统截图；若同日项重复，应回退到不含待确认"},
+            {"stage": "26年综合三项汇总", "amount": current_offer_added + same_day_offer + current_sent + all_collection, "count": current_offer_added_count + same_day_offer_count + current_sent_count + all_collection_count, "formula": "Offer阶段 + Invoice阶段 + 全部本期回款；用于经营现金和顾问表现"},
         ]
         return pd.DataFrame(rows)
 

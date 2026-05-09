@@ -259,25 +259,93 @@ class V2DataService:
         """
         forecast_end = (pd.to_datetime(end_date) + pd.Timedelta(days=forecast_days)).date().isoformat()
 
+        fiscal_year = pd.to_datetime(start_date).year
+        legacy_start = f"{fiscal_year - 1}-01-01"
+
         company_offer = self.db_client.query(f"""
-            SELECT 'Offer' AS metric, COUNT(os.id) AS count_value,
-                   SUM(os.revenue) AS amount_value
-            FROM offersign os
-            WHERE os.signDate >= '{start_date}' AND os.signDate <= '{end_date}'
-              AND os.active = 1
+            SELECT 'Offer' AS metric,
+                   SUM(count_value) AS count_value,
+                   SUM(amount_value) AS amount_value
+            FROM (
+                SELECT COUNT(DISTINCT i.id) AS count_value, SUM(i.invoiceAmount) AS amount_value
+                FROM invoice i
+                WHERE i.status = 'Invoice Added'
+                  AND COALESCE(i.sentDate, i.dateAdded) >= '{start_date}'
+                  AND COALESCE(i.sentDate, i.dateAdded) <= '{end_date}'
+                UNION ALL
+                SELECT COUNT(DISTINCT os.id) AS count_value, SUM(os.revenue) AS amount_value
+                FROM offersign os
+                JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                WHERE os.active = 1
+                  AND os.signDate = '{end_date}'
+                  AND EXISTS (
+                    SELECT 1 FROM invoice i
+                    WHERE i.joborder_id = js.joborder_id
+                      AND i.status = 'Invoice Added'
+                      AND DATE(COALESCE(i.sentDate, i.dateAdded)) = '{end_date}'
+                  )
+            ) x
         """)
         company_invoice = self.db_client.query(f"""
-            SELECT 'Invoice' AS metric, COUNT(i.id) AS count_value,
-                   SUM(i.invoiceAmount) AS amount_value
-            FROM invoice i
-            WHERE i.sentDate >= '{start_date}' AND i.sentDate <= '{end_date}'
+            SELECT 'Invoice' AS metric,
+                   SUM(count_value) AS count_value,
+                   SUM(amount_value) AS amount_value
+            FROM (
+                SELECT COUNT(DISTINCT i.id) AS count_value, SUM(i.invoiceAmount) AS amount_value
+                FROM invoice i
+                WHERE i.status = 'Sent'
+                  AND i.sentDate >= '{start_date}' AND i.sentDate <= '{end_date}'
+                  AND i.joborder_id IN (
+                    SELECT DISTINCT js.joborder_id
+                    FROM offersign os
+                    JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                    WHERE os.active = 1
+                      AND os.signDate >= '{start_date}'
+                      AND os.signDate <= '{end_date}'
+                  )
+                UNION ALL
+                SELECT COUNT(DISTINCT i.id) AS count_value, SUM(i.invoiceAmount) AS amount_value
+                FROM invoice i
+                WHERE i.status = 'Sent'
+                  AND i.sentDate >= '{start_date}' AND i.sentDate <= '{end_date}'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM offersign os
+                    JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                    WHERE js.joborder_id = i.joborder_id
+                      AND os.active = 1
+                      AND os.signDate >= '{start_date}'
+                      AND os.signDate <= '{end_date}'
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM offersign os
+                    JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                    WHERE js.joborder_id = i.joborder_id
+                      AND os.active = 1
+                      AND os.signDate >= '{legacy_start}'
+                      AND os.signDate < '{start_date}'
+                  )
+                UNION ALL
+                SELECT COUNT(DISTINCT i.id) AS count_value, SUM(i.invoiceAmount) AS amount_value
+                FROM invoice i
+                WHERE i.status = 'Sent'
+                  AND COALESCE(i.sentDate, i.dateAdded) >= '{legacy_start}'
+                  AND COALESCE(i.sentDate, i.dateAdded) < '{start_date}'
+            ) x
         """)
         company_collection = self.db_client.query(f"""
-            SELECT 'Collection' AS metric, COUNT(i.id) AS count_value,
+            SELECT 'Collection' AS metric, COUNT(DISTINCT i.id) AS count_value,
                    SUM(i.paymentReceived) AS amount_value
             FROM invoice i
             WHERE i.status = 'Received'
               AND i.paymentReceivedDate >= '{start_date}' AND i.paymentReceivedDate <= '{end_date}'
+              AND i.joborder_id IN (
+                SELECT DISTINCT js.joborder_id
+                FROM offersign os
+                JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                WHERE os.active = 1
+                  AND os.signDate >= '{start_date}'
+                  AND os.signDate <= '{end_date}'
+              )
         """)
         company_forecast = self.db_client.query(f"""
             SELECT 'Forecast' AS metric, COUNT(f.id) AS count_value,
@@ -295,14 +363,39 @@ class V2DataService:
         company["team"] = "Company"
 
         consultant_offer = self.db_client.query(f"""
-            SELECT 'Offer' AS metric, {_name_expr('u')} AS consultant, t.name AS team,
-                   COUNT(os.id) AS count_value, SUM(os.revenue) AS amount_value
-            FROM offersign os
-            LEFT JOIN user u ON os.user_id = u.id
-            LEFT JOIN team t ON u.team_id = t.id
-            WHERE os.signDate >= '{start_date}' AND os.signDate <= '{end_date}'
-              AND os.active = 1
-            GROUP BY os.user_id, consultant, t.name
+            SELECT 'Offer' AS metric, consultant, team,
+                   SUM(count_value) AS count_value, SUM(amount_value) AS amount_value
+            FROM (
+                SELECT {_name_expr('u')} AS consultant, t.name AS team,
+                       COUNT(DISTINCT ia.invoice_id) AS count_value,
+                       SUM(ia.revenue) AS amount_value
+                FROM invoiceassignment ia
+                JOIN invoice i ON ia.invoice_id = i.id
+                LEFT JOIN user u ON ia.user_id = u.id
+                LEFT JOIN team t ON u.team_id = t.id
+                WHERE i.status = 'Invoice Added'
+                  AND COALESCE(i.sentDate, i.dateAdded) >= '{start_date}'
+                  AND COALESCE(i.sentDate, i.dateAdded) <= '{end_date}'
+                GROUP BY ia.user_id, consultant, t.name
+                UNION ALL
+                SELECT {_name_expr('u')} AS consultant, t.name AS team,
+                       COUNT(DISTINCT os.id) AS count_value,
+                       SUM(os.revenue) AS amount_value
+                FROM offersign os
+                JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                LEFT JOIN user u ON os.user_id = u.id
+                LEFT JOIN team t ON u.team_id = t.id
+                WHERE os.active = 1
+                  AND os.signDate = '{end_date}'
+                  AND EXISTS (
+                    SELECT 1 FROM invoice i
+                    WHERE i.joborder_id = js.joborder_id
+                      AND i.status = 'Invoice Added'
+                      AND DATE(COALESCE(i.sentDate, i.dateAdded)) = '{end_date}'
+                  )
+                GROUP BY os.user_id, consultant, t.name
+            ) x
+            GROUP BY consultant, team
         """)
         offer_detail = self.db_client.query(f"""
             SELECT os.id AS offer_id, os.jobsubmission_id, js.joborder_id,
@@ -326,15 +419,68 @@ class V2DataService:
             ORDER BY os.signDate, os.id
         """)
         consultant_invoice = self.db_client.query(f"""
-            SELECT 'Invoice' AS metric, {_name_expr('u')} AS consultant, t.name AS team,
-                   COUNT(DISTINCT ia.invoice_id) AS count_value,
-                   SUM(ia.revenue) AS amount_value
-            FROM invoiceassignment ia
-            JOIN invoice i ON ia.invoice_id = i.id
-            LEFT JOIN user u ON ia.user_id = u.id
-            LEFT JOIN team t ON u.team_id = t.id
-            WHERE i.sentDate >= '{start_date}' AND i.sentDate <= '{end_date}'
-            GROUP BY ia.user_id, consultant, t.name
+            SELECT 'Invoice' AS metric, consultant, team,
+                   SUM(count_value) AS count_value, SUM(amount_value) AS amount_value
+            FROM (
+                SELECT {_name_expr('u')} AS consultant, t.name AS team,
+                       COUNT(DISTINCT ia.invoice_id) AS count_value,
+                       SUM(ia.revenue) AS amount_value
+                FROM invoiceassignment ia
+                JOIN invoice i ON ia.invoice_id = i.id
+                LEFT JOIN user u ON ia.user_id = u.id
+                LEFT JOIN team t ON u.team_id = t.id
+                WHERE i.status = 'Sent'
+                  AND i.sentDate >= '{start_date}' AND i.sentDate <= '{end_date}'
+                  AND i.joborder_id IN (
+                    SELECT DISTINCT js.joborder_id
+                    FROM offersign os
+                    JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                    WHERE os.active = 1
+                      AND os.signDate >= '{start_date}'
+                      AND os.signDate <= '{end_date}'
+                  )
+                GROUP BY ia.user_id, consultant, t.name
+                UNION ALL
+                SELECT {_name_expr('u')} AS consultant, t.name AS team,
+                       COUNT(DISTINCT ia.invoice_id) AS count_value,
+                       SUM(ia.revenue) AS amount_value
+                FROM invoiceassignment ia
+                JOIN invoice i ON ia.invoice_id = i.id
+                LEFT JOIN user u ON ia.user_id = u.id
+                LEFT JOIN team t ON u.team_id = t.id
+                WHERE i.status = 'Sent'
+                  AND i.sentDate >= '{start_date}' AND i.sentDate <= '{end_date}'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM offersign os
+                    JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                    WHERE js.joborder_id = i.joborder_id
+                      AND os.active = 1
+                      AND os.signDate >= '{start_date}'
+                      AND os.signDate <= '{end_date}'
+                  )
+                  AND EXISTS (
+                    SELECT 1 FROM offersign os
+                    JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                    WHERE js.joborder_id = i.joborder_id
+                      AND os.active = 1
+                      AND os.signDate >= '{legacy_start}'
+                      AND os.signDate < '{start_date}'
+                  )
+                GROUP BY ia.user_id, consultant, t.name
+                UNION ALL
+                SELECT {_name_expr('u')} AS consultant, t.name AS team,
+                       COUNT(DISTINCT ia.invoice_id) AS count_value,
+                       SUM(ia.revenue) AS amount_value
+                FROM invoiceassignment ia
+                JOIN invoice i ON ia.invoice_id = i.id
+                LEFT JOIN user u ON ia.user_id = u.id
+                LEFT JOIN team t ON u.team_id = t.id
+                WHERE i.status = 'Sent'
+                  AND COALESCE(i.sentDate, i.dateAdded) >= '{legacy_start}'
+                  AND COALESCE(i.sentDate, i.dateAdded) < '{start_date}'
+                GROUP BY ia.user_id, consultant, t.name
+            ) x
+            GROUP BY consultant, team
         """)
         consultant_collection = self.db_client.query(f"""
             SELECT 'Collection' AS metric, {_name_expr('u')} AS consultant, t.name AS team,
@@ -346,6 +492,14 @@ class V2DataService:
             LEFT JOIN team t ON u.team_id = t.id
             WHERE i.status = 'Received'
               AND i.paymentReceivedDate >= '{start_date}' AND i.paymentReceivedDate <= '{end_date}'
+              AND i.joborder_id IN (
+                SELECT DISTINCT js.joborder_id
+                FROM offersign os
+                JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                WHERE os.active = 1
+                  AND os.signDate >= '{start_date}'
+                  AND os.signDate <= '{end_date}'
+              )
             GROUP BY ia.user_id, consultant, t.name
         """)
         consultant_forecast = self.db_client.query(f"""

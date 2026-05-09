@@ -823,13 +823,13 @@ class V2DataService:
         return pd.DataFrame(rows)
 
     def load_offer_outcome_metrics(self, start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
-        """Track current offer reserve with consultant revenue assignments.
+        """Track unpaid performance reserve with consultant revenue assignments.
 
-        Offer reserve is the business-stage amount still sitting in
-        ``invoice.status = 'Invoice Added'``. Consultant-level amounts must use
-        ``invoiceassignment.revenue`` so collaboration splits are respected.
-        Rejected/voided invoices are excluded by status and never enter unpaid
-        reserve.
+        Unpaid reserve is valid performance that has not been collected yet:
+        ``Invoice Added`` offer performance plus ``Sent`` invoiced but unpaid
+        performance. Consultant-level amounts must use ``invoiceassignment.revenue``
+        so collaboration splits are respected. Rejected/voided invoices are
+        excluded by status and never enter unpaid reserve.
         """
         df = self.db_client.query(f"""
             SELECT i.id AS offer_id, i.jobsubmission_id, i.joborder_id,
@@ -846,10 +846,11 @@ class V2DataService:
             LEFT JOIN jobsubmission js ON i.jobsubmission_id = js.id
             LEFT JOIN user u ON ia.user_id = u.id
             LEFT JOIN team t ON u.team_id = t.id
-            WHERE i.status = 'Invoice Added'
+            WHERE i.status IN ('Invoice Added', 'Sent')
               AND COALESCE(i.active, 1) = 1
-              AND DATE(COALESCE(i.sentDate, i.dateAdded)) >= '{start_date}'
-              AND DATE(COALESCE(i.sentDate, i.dateAdded)) <= '{end_date}'
+              AND i.jobsubmission_id IS NOT NULL
+              AND DATE(CASE WHEN i.status = 'Sent' THEN COALESCE(i.sentDate, i.dateAdded) ELSE COALESCE(i.sentDate, i.dateAdded) END) >= '{start_date}'
+              AND DATE(CASE WHEN i.status = 'Sent' THEN COALESCE(i.sentDate, i.dateAdded) ELSE COALESCE(i.sentDate, i.dateAdded) END) <= '{end_date}'
             UNION ALL
             SELECT i.id AS offer_id, i.jobsubmission_id, i.joborder_id,
                    {_name_expr('u')} AS consultant, t.name AS team,
@@ -891,7 +892,7 @@ class V2DataService:
             ~has_expected_onboard & df["actual_onboard_date"].isna() & (df["offer_date"] <= onboard_mature_cutoff)
         )
         df["is_paid"] = df["paid_amount"] > 0
-        df["is_offer_reserve"] = df["invoice_status"].eq("Invoice Added")
+        df["is_offer_reserve"] = df["invoice_status"].isin(["Invoice Added", "Sent"])
         df["team"] = df["team"].fillna("(No Team)")
         df["consultant"] = df["consultant"].fillna("(No Consultant)")
 

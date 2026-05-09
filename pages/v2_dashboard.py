@@ -771,6 +771,7 @@ def render_fiscal_ytd(context: Dict[str, object]) -> None:
     audit = ytd.get("audit", pd.DataFrame())
     stage_audit = ytd.get("stage_audit", pd.DataFrame())
     legacy_audit = ytd.get("legacy_audit", pd.DataFrame())
+    business_stage_audit = ytd.get("business_stage_audit", pd.DataFrame())
     joborder_stage_detail = ytd.get("joborder_stage_detail", pd.DataFrame())
     offer_detail = ytd.get("offer_detail", pd.DataFrame())
     with st.expander("数据口径校验、阶段流转与 Offer 原始明细", expanded=False):
@@ -784,6 +785,10 @@ def render_fiscal_ytd(context: Dict[str, object]) -> None:
         if isinstance(legacy_audit, pd.DataFrame) and not legacy_audit.empty:
             st.markdown("##### 25年遗留影响")
             st.dataframe(safe_df(legacy_audit), use_container_width=True, hide_index=True)
+        if isinstance(business_stage_audit, pd.DataFrame) and not business_stage_audit.empty:
+            st.markdown("##### 业务系统阶段口径校验")
+            st.caption("这里按系统阶段口径拆分：Invoice Added 仍视为 Offer 阶段，Sent 视为 Invoice 阶段，Received 视为 Collection 阶段。")
+            st.dataframe(safe_df(business_stage_audit), use_container_width=True, hide_index=True)
 
         st.markdown("##### Company vs 顾问层分摊校验")
         st.caption("amount_diff 不为 0 时，通常代表未分摊、重复分摊、跨期、税前/税后或 Forecast 分摊口径差异。")

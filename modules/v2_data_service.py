@@ -407,6 +407,7 @@ class V2DataService:
             "audit": audit,
             "stage_audit": stage_audit.get("stage_audit", pd.DataFrame()),
             "legacy_audit": stage_audit.get("legacy_audit", pd.DataFrame()),
+            "business_stage_audit": stage_audit.get("business_stage_audit", pd.DataFrame()),
             "joborder_stage_detail": stage_audit.get("joborder_stage_detail", pd.DataFrame()),
             "offer_detail": offer_detail,
         }
@@ -528,7 +529,105 @@ class V2DataService:
         sort_cols = [col for col in ["unpaid_invoice_amount", "uninvoiced_offer_amount"] if col in detail.columns]
         if sort_cols:
             detail = detail.sort_values(sort_cols, ascending=[False] * len(sort_cols))
-        return {"stage_audit": stage_audit, "legacy_audit": legacy_audit, "joborder_stage_detail": detail.reset_index(drop=True)}
+        return {
+            "stage_audit": stage_audit,
+            "legacy_audit": legacy_audit,
+            "business_stage_audit": self._business_stage_audit(fiscal_start, end_date),
+            "joborder_stage_detail": detail.reset_index(drop=True),
+        }
+
+    def _business_stage_audit(self, start_date: str, end_date: str) -> pd.DataFrame:
+        def scalar(query: str) -> tuple[float, int]:
+            data = self.db_client.query(query)
+            if data.empty:
+                return 0.0, 0
+            amount = pd.to_numeric(data.iloc[0].get("amount"), errors="coerce")
+            count = pd.to_numeric(data.iloc[0].get("count_value"), errors="coerce")
+            return float(amount) if pd.notna(amount) else 0.0, int(count) if pd.notna(count) else 0
+
+        legacy_offer, legacy_offer_count = scalar(f"""
+            SELECT SUM(i.invoiceAmount) AS amount, COUNT(DISTINCT i.id) AS count_value
+            FROM invoice i
+            WHERE i.status = 'Invoice Added'
+              AND COALESCE(i.sentDate, i.dateAdded) >= '{start_date}'
+              AND COALESCE(i.sentDate, i.dateAdded) <= '{end_date}'
+              AND NOT EXISTS (
+                SELECT 1 FROM offersign os
+                JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                WHERE js.joborder_id = i.joborder_id
+                  AND os.active = 1
+                  AND os.signDate >= '{start_date}'
+                  AND os.signDate <= '{end_date}'
+              )
+        """)
+        current_offer_added, current_offer_added_count = scalar(f"""
+            SELECT SUM(i.invoiceAmount) AS amount, COUNT(DISTINCT i.id) AS count_value
+            FROM invoice i
+            WHERE i.status = 'Invoice Added'
+              AND COALESCE(i.sentDate, i.dateAdded) >= '{start_date}'
+              AND COALESCE(i.sentDate, i.dateAdded) <= '{end_date}'
+              AND i.joborder_id IN (
+                SELECT DISTINCT js.joborder_id
+                FROM offersign os
+                JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                WHERE os.active = 1
+                  AND os.signDate >= '{start_date}'
+                  AND os.signDate <= '{end_date}'
+              )
+        """)
+        current_sent, current_sent_count = scalar(f"""
+            SELECT SUM(i.invoiceAmount) AS amount, COUNT(DISTINCT i.id) AS count_value
+            FROM invoice i
+            WHERE i.status = 'Sent'
+              AND i.sentDate >= '{start_date}'
+              AND i.sentDate <= '{end_date}'
+              AND i.joborder_id IN (
+                SELECT DISTINCT js.joborder_id
+                FROM offersign os
+                JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                WHERE os.active = 1
+                  AND os.signDate >= '{start_date}'
+                  AND os.signDate <= '{end_date}'
+              )
+        """)
+        current_collection, current_collection_count = scalar(f"""
+            SELECT SUM(i.paymentReceived) AS amount, COUNT(DISTINCT i.id) AS count_value
+            FROM invoice i
+            WHERE i.status = 'Received'
+              AND i.paymentReceivedDate >= '{start_date}'
+              AND i.paymentReceivedDate <= '{end_date}'
+              AND i.joborder_id IN (
+                SELECT DISTINCT js.joborder_id
+                FROM offersign os
+                JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                WHERE os.active = 1
+                  AND os.signDate >= '{start_date}'
+                  AND os.signDate <= '{end_date}'
+              )
+        """)
+        same_day_offer, same_day_offer_count = scalar(f"""
+            SELECT SUM(os.revenue) AS amount, COUNT(DISTINCT os.id) AS count_value
+            FROM offersign os
+            JOIN jobsubmission js ON os.jobsubmission_id = js.id
+            WHERE os.active = 1
+              AND os.signDate = '{end_date}'
+              AND EXISTS (
+                SELECT 1 FROM invoice i
+                WHERE i.joborder_id = js.joborder_id
+                  AND i.status = 'Invoice Added'
+                  AND DATE(COALESCE(i.sentDate, i.dateAdded)) = '{end_date}'
+              )
+        """)
+        rows = [
+            {"stage": "25年遗留 Offer", "amount": legacy_offer, "count": legacy_offer_count, "formula": "本期 Invoice Added，但 joborder 没有本期 Offer"},
+            {"stage": "26年新增 Offer-已生成 Invoice Added", "amount": current_offer_added, "count": current_offer_added_count, "formula": "Invoice Added 且 joborder 有本期 Offer"},
+            {"stage": "同日 Offer/Invoice Added 待确认", "amount": same_day_offer, "count": same_day_offer_count, "formula": "分析结束日同日生成 Offer 与 Invoice Added，需确认是否重复阶段归属"},
+            {"stage": "26年新增 Invoice", "amount": current_sent, "count": current_sent_count, "formula": "Sent 发票且 joborder 有本期 Offer"},
+            {"stage": "26年新增 Collection", "amount": current_collection, "count": current_collection_count, "formula": "Received 回款且 joborder 有本期 Offer"},
+            {"stage": "26年三项汇总-不含待确认", "amount": current_offer_added + current_sent + current_collection, "count": current_offer_added_count + current_sent_count + current_collection_count, "formula": "Offer-已生成 Invoice Added + Invoice + Collection"},
+            {"stage": "26年三项汇总-含待确认", "amount": current_offer_added + same_day_offer + current_sent + current_collection, "count": current_offer_added_count + same_day_offer_count + current_sent_count + current_collection_count, "formula": "用于对齐系统截图；若同日项重复，应回退到不含待确认"},
+        ]
+        return pd.DataFrame(rows)
 
     @staticmethod
     def _stage_status(row: pd.Series) -> str:

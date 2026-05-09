@@ -687,8 +687,8 @@ class V2DataService:
             SELECT SUM(i.invoiceAmount) AS amount, COUNT(DISTINCT i.id) AS count_value
             FROM invoice i
             WHERE i.status = 'Invoice Added'
-              AND COALESCE(i.sentDate, i.dateAdded) >= '{start_date}'
-              AND COALESCE(i.sentDate, i.dateAdded) <= '{end_date}'
+              AND DATE(COALESCE(i.sentDate, i.dateAdded)) >= '{start_date}'
+              AND DATE(COALESCE(i.sentDate, i.dateAdded)) <= '{end_date}'
               AND NOT EXISTS (
                 SELECT 1 FROM offersign os
                 JOIN jobsubmission js ON os.jobsubmission_id = js.id
@@ -702,8 +702,8 @@ class V2DataService:
             SELECT SUM(i.invoiceAmount) AS amount, COUNT(DISTINCT i.id) AS count_value
             FROM invoice i
             WHERE i.status = 'Invoice Added'
-              AND COALESCE(i.sentDate, i.dateAdded) >= '{start_date}'
-              AND COALESCE(i.sentDate, i.dateAdded) <= '{end_date}'
+              AND DATE(COALESCE(i.sentDate, i.dateAdded)) >= '{start_date}'
+              AND DATE(COALESCE(i.sentDate, i.dateAdded)) <= '{end_date}'
               AND i.joborder_id IN (
                 SELECT DISTINCT js.joborder_id
                 FROM offersign os
@@ -848,8 +848,8 @@ class V2DataService:
             LEFT JOIN team t ON u.team_id = t.id
             WHERE i.status = 'Invoice Added'
               AND COALESCE(i.active, 1) = 1
-              AND COALESCE(i.sentDate, i.dateAdded) >= '{start_date}'
-              AND COALESCE(i.sentDate, i.dateAdded) <= '{end_date}'
+              AND DATE(COALESCE(i.sentDate, i.dateAdded)) >= '{start_date}'
+              AND DATE(COALESCE(i.sentDate, i.dateAdded)) <= '{end_date}'
             UNION ALL
             SELECT i.id AS offer_id, i.jobsubmission_id, i.joborder_id,
                    {_name_expr('u')} AS consultant, t.name AS team,

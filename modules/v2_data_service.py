@@ -964,8 +964,10 @@ class V2DataService:
                     grouped[col] = 0
                 grouped[col] = pd.to_numeric(grouped[col], errors="coerce").fillna(0)
         grouped["offer_to_onboard_rate"] = grouped["onboard_count"] / grouped["matured_offer_count"].replace(0, pd.NA)
-        grouped["offer_to_paid_rate"] = grouped["paid_offer_count"] / grouped["offer_count"].replace(0, pd.NA)
-        grouped["paid_amount_per_offer_amount"] = grouped["paid_amount"] / grouped["offer_amount"].replace(0, pd.NA)
+        total_outcome_count = grouped["offer_count"] + grouped["paid_offer_count"]
+        total_outcome_amount = grouped["offer_unpaid_amount"] + grouped["paid_amount"]
+        grouped["offer_to_paid_rate"] = grouped["paid_offer_count"] / total_outcome_count.replace(0, pd.NA)
+        grouped["paid_amount_per_offer_amount"] = grouped["paid_amount"] / total_outcome_amount.replace(0, pd.NA)
         return grouped
 
     def load_project_additions(self, start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:

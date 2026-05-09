@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Dict, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -27,7 +28,7 @@ class V2DataService:
 
     @staticmethod
     def default_window(days: int = 365) -> Dict[str, str]:
-        end = datetime.now().date()
+        end = datetime.now(ZoneInfo("Asia/Shanghai")).date()
         start = end - timedelta(days=days)
         return {"start_date": start.isoformat(), "end_date": end.isoformat()}
 
@@ -303,6 +304,27 @@ class V2DataService:
               AND os.active = 1
             GROUP BY os.user_id, consultant, t.name
         """)
+        offer_detail = self.db_client.query(f"""
+            SELECT os.id AS offer_id, os.jobsubmission_id, js.joborder_id,
+                   {_name_expr('u')} AS consultant, t.name AS team,
+                   c.name AS client_name, jo.jobTitle AS position_name,
+                   os.signDate AS sign_date, os.dateAdded AS date_added,
+                   os.offerStatus AS offer_status,
+                   os.revenue AS offer_amount,
+                   os.hunterFee AS hunter_fee,
+                   os.total_billable_compensation,
+                   os.annualSalary AS annual_salary,
+                   os.active
+            FROM offersign os
+            LEFT JOIN jobsubmission js ON os.jobsubmission_id = js.id
+            LEFT JOIN joborder jo ON js.joborder_id = jo.id
+            LEFT JOIN client c ON jo.client_id = c.id
+            LEFT JOIN user u ON os.user_id = u.id
+            LEFT JOIN team t ON u.team_id = t.id
+            WHERE os.signDate >= '{start_date}' AND os.signDate <= '{end_date}'
+              AND os.active = 1
+            ORDER BY os.signDate, os.id
+        """)
         consultant_invoice = self.db_client.query(f"""
             SELECT 'Invoice' AS metric, {_name_expr('u')} AS consultant, t.name AS team,
                    COUNT(DISTINCT ia.invoice_id) AS count_value,
@@ -366,7 +388,43 @@ class V2DataService:
             team["level"] = "Team"
             team["name"] = team["team"]
 
-        return {"company": company, "team": team, "consultant": consultant}
+        audit = self._metric_reconciliation(company, consultant)
+
+        if not offer_detail.empty:
+            offer_detail["sign_date"] = _to_datetime(offer_detail["sign_date"])
+            offer_detail["date_added"] = _to_datetime(offer_detail["date_added"])
+            for col in ["offer_amount", "hunter_fee", "total_billable_compensation", "annual_salary"]:
+                if col in offer_detail.columns:
+                    offer_detail[col] = pd.to_numeric(offer_detail[col], errors="coerce").fillna(0)
+            offer_detail["team"] = offer_detail["team"].fillna("(No Team)")
+            offer_detail["consultant"] = offer_detail["consultant"].fillna("(No Consultant)")
+
+        return {"company": company, "team": team, "consultant": consultant, "audit": audit, "offer_detail": offer_detail}
+
+    @staticmethod
+    def _metric_reconciliation(company: pd.DataFrame, consultant: pd.DataFrame) -> pd.DataFrame:
+        metrics = ["Offer", "Invoice", "Collection", "Forecast"]
+        rows = []
+        for metric in metrics:
+            company_row = company[company["metric"] == metric] if isinstance(company, pd.DataFrame) and not company.empty else pd.DataFrame()
+            consultant_rows = consultant[consultant["metric"] == metric] if isinstance(consultant, pd.DataFrame) and not consultant.empty else pd.DataFrame()
+            company_amount = float(company_row["amount_value"].sum()) if not company_row.empty else 0.0
+            consultant_amount = float(consultant_rows["amount_value"].sum()) if not consultant_rows.empty else 0.0
+            company_count = int(company_row["count_value"].sum()) if not company_row.empty else 0
+            consultant_count = int(consultant_rows["count_value"].sum()) if not consultant_rows.empty else 0
+            rows.append(
+                {
+                    "metric": metric,
+                    "company_amount": company_amount,
+                    "consultant_amount_sum": consultant_amount,
+                    "amount_diff": company_amount - consultant_amount,
+                    "company_count": company_count,
+                    "consultant_count_sum": consultant_count,
+                    "count_diff": company_count - consultant_count,
+                    "status": "OK" if abs(company_amount - consultant_amount) < 1 and company_count == consultant_count else "Check",
+                }
+            )
+        return pd.DataFrame(rows)
 
     def load_offer_outcome_metrics(self, start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
         """Track same-period offers through onboard and payment outcomes."""

@@ -768,6 +768,38 @@ def render_fiscal_ytd(context: Dict[str, object]) -> None:
     consultant_pivot = _pivot_metric(consultant, index_col="consultant", outcome_df=outcome_consultant)
     st.dataframe(safe_df(consultant_pivot), use_container_width=True)
 
+    audit = ytd.get("audit", pd.DataFrame())
+    offer_detail = ytd.get("offer_detail", pd.DataFrame())
+    with st.expander("数据口径校验与 Offer 原始明细", expanded=False):
+        st.caption(
+            "校验口径：Company 总额来自单据总额；顾问层来自顾问字段或分摊表。"
+            "amount_diff 不为 0 时，说明存在未分摊、重复分摊、税前/税后或日期口径差异，需要逐笔核对。"
+        )
+        if isinstance(audit, pd.DataFrame) and not audit.empty:
+            st.dataframe(safe_df(audit), use_container_width=True, hide_index=True)
+        else:
+            st.info("暂无校验数据。")
+
+        if isinstance(offer_detail, pd.DataFrame) and not offer_detail.empty:
+            detail_cols = [
+                "offer_id",
+                "sign_date",
+                "consultant",
+                "team",
+                "client_name",
+                "position_name",
+                "offer_amount",
+                "offer_status",
+                "jobsubmission_id",
+                "joborder_id",
+                "date_added",
+            ]
+            existing = [col for col in detail_cols if col in offer_detail.columns]
+            st.markdown("##### Offer 原始明细")
+            st.dataframe(safe_df(offer_detail[existing]), use_container_width=True, hide_index=True)
+        else:
+            st.info("暂无 Offer 原始明细。")
+
 
 def _pivot_metric(df: pd.DataFrame, index_col: str, outcome_df: pd.DataFrame = None) -> pd.DataFrame:
     if df is None or df.empty:

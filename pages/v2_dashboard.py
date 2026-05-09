@@ -769,16 +769,51 @@ def render_fiscal_ytd(context: Dict[str, object]) -> None:
     st.dataframe(safe_df(consultant_pivot), use_container_width=True)
 
     audit = ytd.get("audit", pd.DataFrame())
+    stage_audit = ytd.get("stage_audit", pd.DataFrame())
+    legacy_audit = ytd.get("legacy_audit", pd.DataFrame())
+    joborder_stage_detail = ytd.get("joborder_stage_detail", pd.DataFrame())
     offer_detail = ytd.get("offer_detail", pd.DataFrame())
-    with st.expander("数据口径校验与 Offer 原始明细", expanded=False):
+    with st.expander("数据口径校验、阶段流转与 Offer 原始明细", expanded=False):
         st.caption(
-            "校验口径：Company 总额来自单据总额；顾问层来自顾问字段或分摊表。"
-            "amount_diff 不为 0 时，说明存在未分摊、重复分摊、税前/税后或日期口径差异，需要逐笔核对。"
+            "Offer / Invoice / Collection 是阶段流转关系：Offer 进入 Invoice 后会从未开票 Offer 库存减少；"
+            "Invoice 进入 Collection 后会从未回款 Invoice 库存减少。这里同时展示本期流量、期末库存和历史遗留影响。"
         )
+        if isinstance(stage_audit, pd.DataFrame) and not stage_audit.empty:
+            st.markdown("##### 阶段流转校验")
+            st.dataframe(safe_df(stage_audit), use_container_width=True, hide_index=True)
+        if isinstance(legacy_audit, pd.DataFrame) and not legacy_audit.empty:
+            st.markdown("##### 25年遗留影响")
+            st.dataframe(safe_df(legacy_audit), use_container_width=True, hide_index=True)
+
+        st.markdown("##### Company vs 顾问层分摊校验")
+        st.caption("amount_diff 不为 0 时，通常代表未分摊、重复分摊、跨期、税前/税后或 Forecast 分摊口径差异。")
         if isinstance(audit, pd.DataFrame) and not audit.empty:
             st.dataframe(safe_df(audit), use_container_width=True, hide_index=True)
         else:
             st.info("暂无校验数据。")
+
+        if isinstance(joborder_stage_detail, pd.DataFrame) and not joborder_stage_detail.empty:
+            detail_cols = [
+                "joborder_id",
+                "client_name",
+                "position_name",
+                "consultant",
+                "team",
+                "stage_status",
+                "offer_amount",
+                "invoice_amount",
+                "payment_received",
+                "uninvoiced_offer_amount",
+                "unpaid_invoice_amount",
+                "over_invoiced_amount",
+                "over_collected_amount",
+                "first_offer_date",
+                "first_invoice_date",
+                "latest_payment_date",
+            ]
+            existing = [col for col in detail_cols if col in joborder_stage_detail.columns]
+            st.markdown("##### Job Order 阶段余额明细")
+            st.dataframe(safe_df(joborder_stage_detail[existing]), use_container_width=True, hide_index=True)
 
         if isinstance(offer_detail, pd.DataFrame) and not offer_detail.empty:
             detail_cols = [

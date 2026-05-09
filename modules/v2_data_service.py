@@ -389,6 +389,7 @@ class V2DataService:
             team["name"] = team["team"]
 
         audit = self._metric_reconciliation(company, consultant)
+        stage_audit = self._load_stage_balance_audit(start_date, end_date)
 
         if not offer_detail.empty:
             offer_detail["sign_date"] = _to_datetime(offer_detail["sign_date"])
@@ -399,7 +400,147 @@ class V2DataService:
             offer_detail["team"] = offer_detail["team"].fillna("(No Team)")
             offer_detail["consultant"] = offer_detail["consultant"].fillna("(No Consultant)")
 
-        return {"company": company, "team": team, "consultant": consultant, "audit": audit, "offer_detail": offer_detail}
+        return {
+            "company": company,
+            "team": team,
+            "consultant": consultant,
+            "audit": audit,
+            "stage_audit": stage_audit.get("stage_audit", pd.DataFrame()),
+            "legacy_audit": stage_audit.get("legacy_audit", pd.DataFrame()),
+            "joborder_stage_detail": stage_audit.get("joborder_stage_detail", pd.DataFrame()),
+            "offer_detail": offer_detail,
+        }
+
+    def _load_stage_balance_audit(self, start_date: str, end_date: str) -> Dict[str, pd.DataFrame]:
+        fiscal_start = pd.to_datetime(start_date).date().isoformat()
+        fiscal_year = pd.to_datetime(start_date).year
+        legacy_start = f"{fiscal_year - 1}-01-01"
+        offers = self.db_client.query(f"""
+            SELECT os.id AS offer_id, js.joborder_id, os.signDate AS sign_date,
+                   os.revenue AS offer_amount, {_name_expr('u')} AS consultant,
+                   t.name AS team, c.name AS client_name, jo.jobTitle AS position_name
+            FROM offersign os
+            LEFT JOIN jobsubmission js ON os.jobsubmission_id = js.id
+            LEFT JOIN joborder jo ON js.joborder_id = jo.id
+            LEFT JOIN client c ON jo.client_id = c.id
+            LEFT JOIN user u ON os.user_id = u.id
+            LEFT JOIN team t ON u.team_id = t.id
+            WHERE os.signDate >= '{legacy_start}' AND os.signDate <= '{end_date}'
+              AND os.active = 1
+        """)
+        invoices = self.db_client.query(f"""
+            SELECT i.id AS invoice_id, i.joborder_id, i.client_id, c.name AS client_name,
+                   i.invoiceAmount AS invoice_amount,
+                   COALESCE(i.paymentReceived, 0) AS payment_received,
+                   i.status, i.sentDate AS sent_date, i.dateAdded AS date_added,
+                   i.paymentReceivedDate AS payment_received_date
+            FROM invoice i
+            LEFT JOIN client c ON i.client_id = c.id
+            WHERE (
+                    COALESCE(i.sentDate, i.dateAdded) >= '{legacy_start}'
+                    OR i.paymentReceivedDate >= '{fiscal_start}'
+                  )
+              AND COALESCE(i.sentDate, i.dateAdded) <= '{end_date}'
+        """)
+
+        if offers.empty and invoices.empty:
+            return {"stage_audit": pd.DataFrame(), "legacy_audit": pd.DataFrame(), "joborder_stage_detail": pd.DataFrame()}
+
+        if not offers.empty:
+            offers["sign_date"] = _to_datetime(offers["sign_date"])
+            offers["offer_amount"] = pd.to_numeric(offers["offer_amount"], errors="coerce").fillna(0)
+        else:
+            offers = pd.DataFrame(columns=["offer_id", "joborder_id", "offer_amount", "sign_date", "client_name", "position_name", "consultant", "team"])
+
+        if not invoices.empty:
+            for col in ["sent_date", "date_added", "payment_received_date"]:
+                invoices[col] = _to_datetime(invoices[col])
+            invoices["invoice_date"] = invoices["sent_date"].where(invoices["sent_date"].notna(), invoices["date_added"])
+            invoices["invoice_amount"] = pd.to_numeric(invoices["invoice_amount"], errors="coerce").fillna(0)
+            invoices["payment_received"] = pd.to_numeric(invoices["payment_received"], errors="coerce").fillna(0)
+        else:
+            invoices = pd.DataFrame(columns=["invoice_id", "joborder_id", "invoice_amount", "payment_received", "invoice_date", "payment_received_date"])
+
+        start_ts = pd.to_datetime(start_date)
+        end_ts = pd.to_datetime(end_date)
+        offer_group = (
+            offers.groupby("joborder_id", dropna=False)
+            .agg(
+                offer_count=("offer_id", "nunique"),
+                offer_amount=("offer_amount", "sum"),
+                first_offer_date=("sign_date", "min"),
+                latest_offer_date=("sign_date", "max"),
+                consultant=("consultant", lambda s: " / ".join(sorted(set(s.dropna().astype(str))))),
+                team=("team", lambda s: " / ".join(sorted(set(s.dropna().astype(str))))),
+                client_name=("client_name", "first"),
+                position_name=("position_name", "first"),
+            )
+            .reset_index()
+        )
+        invoice_group = (
+            invoices.groupby("joborder_id", dropna=False)
+            .agg(
+                invoice_count=("invoice_id", "nunique"),
+                invoice_amount=("invoice_amount", "sum"),
+                payment_received=("payment_received", "sum"),
+                first_invoice_date=("invoice_date", "min"),
+                latest_payment_date=("payment_received_date", "max"),
+            )
+            .reset_index()
+        )
+        detail = offer_group.merge(invoice_group, on="joborder_id", how="outer")
+        for col in ["offer_count", "offer_amount", "invoice_count", "invoice_amount", "payment_received"]:
+            if col in detail.columns:
+                detail[col] = pd.to_numeric(detail[col], errors="coerce").fillna(0)
+
+        detail["uninvoiced_offer_amount"] = (detail["offer_amount"] - detail["invoice_amount"]).clip(lower=0)
+        detail["unpaid_invoice_amount"] = (detail["invoice_amount"] - detail["payment_received"]).clip(lower=0)
+        detail["over_invoiced_amount"] = (detail["invoice_amount"] - detail["offer_amount"]).clip(lower=0)
+        detail["over_collected_amount"] = (detail["payment_received"] - detail["invoice_amount"]).clip(lower=0)
+        detail["stage_status"] = detail.apply(self._stage_status, axis=1)
+
+        current_offers = offers[(offers["sign_date"] >= start_ts) & (offers["sign_date"] <= end_ts)]
+        current_invoices = invoices[(invoices["invoice_date"] >= start_ts) & (invoices["invoice_date"] <= end_ts)]
+        current_payments = invoices[(invoices["payment_received_date"] >= start_ts) & (invoices["payment_received_date"] <= end_ts)]
+        legacy_invoices = invoices[invoices["invoice_date"] < start_ts].copy()
+        legacy_offers = detail[pd.to_datetime(detail["first_offer_date"], errors="coerce") < start_ts].copy()
+
+        stage_audit = pd.DataFrame(
+            [
+                {"stage": "本期新增 Offer", "amount": float(current_offers["offer_amount"].sum()), "count": int(current_offers["offer_id"].nunique()), "meaning": "本期签约的 Offer 总额"},
+                {"stage": "本期新增 Invoice", "amount": float(current_invoices["invoice_amount"].sum()), "count": int(current_invoices["invoice_id"].nunique()), "meaning": "本期开票/发送的发票总额"},
+                {"stage": "本期 Collection", "amount": float(current_payments["payment_received"].sum()), "count": int(current_payments["invoice_id"].nunique()), "meaning": "本期实际收到的回款；可能来自本期或历史 Invoice"},
+                {"stage": "期末未开票 Offer 库存", "amount": float(detail["uninvoiced_offer_amount"].sum()), "count": int((detail["uninvoiced_offer_amount"] > 0).sum()), "meaning": "Offer 金额尚未进入 Invoice 的余额"},
+                {"stage": "期末未回款 Invoice 库存", "amount": float(detail["unpaid_invoice_amount"].sum()), "count": int((detail["unpaid_invoice_amount"] > 0).sum()), "meaning": "Invoice 金额尚未进入 Collection 的余额"},
+                {"stage": "金额差异/超额开票", "amount": float(detail["over_invoiced_amount"].sum()), "count": int((detail["over_invoiced_amount"] > 0).sum()), "meaning": "Invoice 金额超过 Offer 金额，需检查税费、拆单或无 Offer 发票"},
+                {"stage": "金额差异/超额回款", "amount": float(detail["over_collected_amount"].sum()), "count": int((detail["over_collected_amount"] > 0).sum()), "meaning": "Collection 超过 Invoice，需检查跨单据回款或历史数据"},
+            ]
+        )
+
+        legacy_audit = pd.DataFrame(
+            [
+                {"legacy_item": "25年遗留 Invoice 本期回款", "amount": float(legacy_invoices.loc[legacy_invoices["payment_received_date"] >= start_ts, "payment_received"].sum()), "count": int(legacy_invoices.loc[legacy_invoices["payment_received_date"] >= start_ts, "invoice_id"].nunique()), "meaning": "本期 Collection 中来自 25 年或更早开票的金额"},
+                {"legacy_item": "25年遗留未回 Invoice", "amount": float((legacy_invoices["invoice_amount"] - legacy_invoices["payment_received"]).clip(lower=0).sum()), "count": int(((legacy_invoices["invoice_amount"] - legacy_invoices["payment_received"]).clip(lower=0) > 0).sum()), "meaning": "期末仍未回款的历史发票余额"},
+                {"legacy_item": "25年遗留未开票 Offer", "amount": float(legacy_offers["uninvoiced_offer_amount"].sum()), "count": int((legacy_offers["uninvoiced_offer_amount"] > 0).sum()), "meaning": "历史 Offer 尚未开票的余额"},
+            ]
+        )
+
+        sort_cols = [col for col in ["unpaid_invoice_amount", "uninvoiced_offer_amount"] if col in detail.columns]
+        if sort_cols:
+            detail = detail.sort_values(sort_cols, ascending=[False] * len(sort_cols))
+        return {"stage_audit": stage_audit, "legacy_audit": legacy_audit, "joborder_stage_detail": detail.reset_index(drop=True)}
+
+    @staticmethod
+    def _stage_status(row: pd.Series) -> str:
+        if row.get("unpaid_invoice_amount", 0) > 0:
+            return "Invoice未回款"
+        if row.get("uninvoiced_offer_amount", 0) > 0:
+            return "Offer未开票"
+        if row.get("payment_received", 0) > 0:
+            return "已回款"
+        if row.get("invoice_amount", 0) > 0:
+            return "已开票"
+        return "仅Offer"
 
     @staticmethod
     def _metric_reconciliation(company: pd.DataFrame, consultant: pd.DataFrame) -> pd.DataFrame:

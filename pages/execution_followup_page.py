@@ -47,12 +47,7 @@ def render_execution_followup(
     if mode == "指标录入":
         _render_task_definition(config, consultants)
     elif mode == "完成核对":
-        if review_context_loader is not None:
-            with st.spinner("加载核对数据..."):
-                review_context = review_context_loader()
-        else:
-            review_context = context
-        _render_review(tasks_df, review_context)
+        _render_review(tasks_df, context, config, review_context_loader)
     else:
         _render_task_library(tasks_df)
 
@@ -91,12 +86,11 @@ def _render_manual_task_builder(config: Dict[str, object], consultants: list[str
         target_value = st.number_input("目标值", value=1.0, step=1.0, key="manual_task_target")
 
     c4, c5, c6 = st.columns([1, 1, 1])
-    default_start = str(config.get("start_date") or "")
-    default_end = str(config.get("end_date") or "")
+    default_start, default_end = _default_assessment_period(config)
     with c4:
-        period_start = st.text_input("核查开始日期", value=default_start, key="manual_task_period_start")
+        period_start = st.date_input("核查开始日期", value=default_start, key="manual_task_period_start")
     with c5:
-        period_end = st.text_input("核查结束日期", value=default_end, key="manual_task_period_end")
+        period_end = st.date_input("核查结束日期", value=default_end, key="manual_task_period_end")
     with c6:
         priority = st.selectbox("优先级", ["High", "Medium", "Low"], index=1, key="manual_task_priority")
 
@@ -119,8 +113,8 @@ def _render_manual_task_builder(config: Dict[str, object], consultants: list[str
                 "metric_key": metric_key,
                 "operator": operator,
                 "target_value": float(target_value or 0),
-                "period_start": period_start,
-                "period_end": period_end,
+                "period_start": pd.to_datetime(period_start).date().isoformat(),
+                "period_end": pd.to_datetime(period_end).date().isoformat(),
                 "priority": priority,
                 "status": "active",
                 "notes": "手动指标选项录入",
@@ -230,13 +224,41 @@ def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> Non
         st.rerun()
 
 
-def _render_review(tasks_df: pd.DataFrame, context: Dict[str, object]) -> None:
+def _render_review(
+    tasks_df: pd.DataFrame,
+    base_context: Dict[str, object],
+    config: Dict[str, object],
+    review_context_loader: Callable[[], Dict[str, object]] | None = None,
+) -> None:
     st.markdown("#### 完成情况复盘")
     if tasks_df.empty:
         st.info("还没有执行任务。")
         return
 
+    default_start, default_end = _default_assessment_period(config)
+    c1, c2, c3 = st.columns([1, 1, 1.2])
+    with c1:
+        review_start = st.date_input("考核开始日期", value=default_start, key="execution_review_start")
+    with c2:
+        review_end = st.date_input("考核结束日期", value=default_end, key="execution_review_end")
+    with c3:
+        override_period = st.checkbox("用筛选周期核查", value=True, help="开启后，完成核对按上方日期重新计算，不受任务保存时的周期影响。")
+
     active = tasks_df[tasks_df["status"].astype(str).isin(["active", "跟进中", "计划中", ""])]
+    active = _filter_tasks_by_review_period(active, review_start, review_end)
+    if override_period and not active.empty:
+        active = active.copy()
+        active["period_start"] = pd.to_datetime(review_start).date().isoformat()
+        active["period_end"] = pd.to_datetime(review_end).date().isoformat()
+    if active.empty:
+        st.info("当前考核周期内没有可复盘任务。")
+        return
+
+    if review_context_loader is not None:
+        with st.spinner("加载核对数据..."):
+            context = review_context_loader()
+    else:
+        context = base_context
     reviewed = review_tasks(active, context)
     if reviewed.empty:
         st.info("暂无可复盘任务。")
@@ -391,6 +413,29 @@ def _render_metric_reference() -> None:
 
 def _metric_label_options() -> list[str]:
     return [str(item.get("label")) for item in METRIC_DEFINITIONS.values()]
+
+
+def _default_assessment_period(config: Dict[str, object]) -> tuple[object, object]:
+    end = pd.to_datetime(config.get("end_date"), errors="coerce")
+    if pd.isna(end):
+        end = pd.Timestamp.today().normalize()
+    start = end.replace(day=1)
+    return start.date(), end.date()
+
+
+def _filter_tasks_by_review_period(tasks_df: pd.DataFrame, review_start: object, review_end: object) -> pd.DataFrame:
+    if tasks_df is None or tasks_df.empty:
+        return pd.DataFrame()
+    start = pd.to_datetime(review_start, errors="coerce")
+    end = pd.to_datetime(review_end, errors="coerce")
+    if pd.isna(start) or pd.isna(end):
+        return tasks_df.copy()
+    work = tasks_df.copy()
+    task_start = pd.to_datetime(work.get("period_start"), errors="coerce")
+    task_end = pd.to_datetime(work.get("period_end"), errors="coerce")
+    missing = task_start.isna() | task_end.isna()
+    overlaps = missing | ((task_start.dt.normalize() <= end.normalize()) & (task_end.dt.normalize() >= start.normalize()))
+    return work[overlaps].copy()
 
 
 def _apply_editor_row(task: Dict[str, object], row: pd.Series) -> None:

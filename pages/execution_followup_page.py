@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import date
 from typing import Callable, Dict
 
 import pandas as pd
@@ -11,29 +10,42 @@ import streamlit as st
 
 from modules.execution_followup import (
     METRIC_DEFINITIONS,
-    OPERATORS,
-    OWNER_TYPES,
     add_task,
     delete_tasks,
     evidence_for_task,
     load_tasks,
-    parse_management_tasks,
     review_tasks,
+    run_task_definition_agent,
     save_tasks,
 )
+from pages.v2_dashboard import AI_PROVIDER_PRESETS, _get_ai_api_key, _masked_key
 
 
-def render_execution_followup(context: Dict[str, object], config: Dict[str, object], review_context_loader: Callable[[], Dict[str, object]] | None = None) -> None:
+DEFAULT_AGENT_PROVIDER = "Kimi / Moonshot CN"
+DEFAULT_AGENT_MODEL = "kimi-k2.5"
+DEFAULT_AGENT_MAX_TOKENS = 1800
+DEFAULT_AGENT_TIMEOUT = 90
+
+
+def render_execution_followup(
+    context: Dict[str, object],
+    config: Dict[str, object],
+    review_context_loader: Callable[[], Dict[str, object]] | None = None,
+) -> None:
     st.markdown("### 执行跟进")
-    st.caption("把月会行动项拆成可核查指标，并直接从系统数据追踪完成情况。")
+    st.caption("把月会行动项拆成可核查指标，并在复盘时直接从系统数据追踪完成情况。")
 
     tasks_df = load_tasks()
     consultants = _consultant_options(context)
-    teams = _team_options(context)
 
-    mode = st.radio("执行跟进模式", ["任务解析", "完成核对", "任务库"], horizontal=True, label_visibility="collapsed")
-    if mode == "任务解析":
-        _render_parser(config, consultants)
+    mode = st.radio(
+        "执行跟进模式",
+        ["任务定义 Agent", "完成核对", "任务库"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    if mode == "任务定义 Agent":
+        _render_task_agent(config, consultants)
     elif mode == "完成核对":
         if review_context_loader is not None:
             with st.spinner("加载核对数据..."):
@@ -45,57 +57,100 @@ def render_execution_followup(context: Dict[str, object], config: Dict[str, obje
         _render_task_library(tasks_df)
 
 
-def _render_parser(config: Dict[str, object], consultants: list[str]) -> None:
-    st.markdown("#### 管理任务解析")
-    st.caption("示例中的 Consultant 可替换为任意顾问姓名。")
+def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> None:
+    st.markdown("#### 管理任务定义 Agent")
+    st.caption("先通过对话澄清管理动作，再生成可核查指标。解析阶段不扫描完成结果，完成核对在单独模式里执行。")
+
+    llm_config = _execution_agent_llm_config()
+    with st.expander("模型连接", expanded=False):
+        if llm_config.get("api_key"):
+            st.success(f"已读取模型 Key：{llm_config.get('key_source')} / {_masked_key(str(llm_config.get('api_key')))}")
+        else:
+            st.warning("未读取到模型 Key。请在 Streamlit Secrets 配置 MOONSHOT_API_KEY。")
+        st.caption(
+            f"provider={llm_config.get('provider')} | model={llm_config.get('model')} | "
+            f"base_url={llm_config.get('base_url')}"
+        )
+
+    st.session_state.setdefault("execution_task_agent_messages", [])
+    st.session_state.setdefault("execution_agent_draft_tasks", [])
+
+    for message in st.session_state["execution_task_agent_messages"]:
+        role = "user" if message.get("role") == "user" else "assistant"
+        with st.chat_message(role):
+            st.markdown(message.get("content", ""))
+
     sample_text = "Consultant 下个月改善：BD 2家客户，新增面试5个，推面比50%，新增Offer 1个"
-    if st.button("填入示例", use_container_width=True):
-        st.session_state["execution_parse_text"] = sample_text
-    text = st.text_area(
-        "输入月会行动项",
+    user_text = st.text_area(
+        "和任务 Agent 说明本次月会行动项",
         placeholder=f"例如：{sample_text}",
         height=110,
-        key="execution_parse_text",
+        key="execution_agent_user_text",
     )
-    parsed = []
-    if st.button("解析任务", use_container_width=True):
-        if not str(text or "").strip():
-            parsed = []
-            st.session_state["parsed_execution_tasks"] = []
-            st.warning("请先输入任务内容。灰色示例只是提示文案，不会自动作为输入。")
-        else:
-            parsed = parse_management_tasks(text, consultants, config)
-            st.session_state["parsed_execution_tasks"] = parsed
-            if not parsed:
-                st.warning("没有识别到可核查指标。请包含目标数字，例如：新增面试5个、推面比50%、新增Offer 1个。")
+    col1, col2, col3 = st.columns([1.2, 1, 1])
+    with col1:
+        send_clicked = st.button("发送给任务 Agent", type="primary", use_container_width=True)
+    with col2:
+        if st.button("填入示例", use_container_width=True):
+            st.session_state["execution_agent_user_text"] = sample_text
+            st.rerun()
+    with col3:
+        if st.button("清空对话", use_container_width=True):
+            st.session_state["execution_task_agent_messages"] = []
+            st.session_state["execution_agent_draft_tasks"] = []
+            st.rerun()
 
-    parsed = st.session_state.get("parsed_execution_tasks", parsed)
-    if not parsed:
-        st.info("输入自然语言任务后点击解析。解析结果需要确认后才会保存。")
+    if send_clicked:
+        if not str(user_text or "").strip():
+            st.error("请先输入你希望跟进的管理动作。灰色示例只是提示文案，不会自动作为输入。")
+        elif not llm_config.get("api_key"):
+            st.error("任务定义 Agent 需要模型 Key。当前没有读取到 MOONSHOT_API_KEY。")
+        else:
+            st.session_state["execution_task_agent_messages"].append({"role": "user", "content": user_text})
+            try:
+                with st.spinner("任务 Agent 正在澄清并生成指标草案..."):
+                    result = run_task_definition_agent(
+                        user_message=user_text,
+                        chat_history=st.session_state["execution_task_agent_messages"],
+                        consultants=consultants,
+                        config=config,
+                        llm_config=llm_config,
+                    )
+                assistant_message = result.get("assistant_message") or "我已经整理出任务草案，请在下方确认。"
+                tasks = result.get("tasks") or []
+                if tasks:
+                    st.session_state["execution_agent_draft_tasks"] = tasks
+                    assistant_message += f"\n\n已生成 {len(tasks)} 条可核查指标草案。"
+                st.session_state["execution_task_agent_messages"].append(
+                    {"role": "assistant", "content": assistant_message}
+                )
+                st.rerun()
+            except Exception as exc:
+                st.session_state["execution_task_agent_messages"].append(
+                    {"role": "assistant", "content": f"任务 Agent 调用失败：{exc}"}
+                )
+                st.error(f"任务 Agent 调用失败：{exc}")
+
+    draft_tasks = st.session_state.get("execution_agent_draft_tasks", [])
+    if not draft_tasks:
+        st.info("可以连续对话补充：对象、周期、指标口径、目标值。Agent 只在信息足够时生成待确认任务。")
         return
 
-    st.markdown("##### 解析结果")
-    preview = pd.DataFrame(parsed)
+    st.markdown("##### 待确认任务指标")
     edited = st.data_editor(
-        _display_tasks(preview),
+        _display_tasks(pd.DataFrame(draft_tasks)),
         use_container_width=True,
         hide_index=True,
         num_rows="fixed",
-        key="parsed_execution_editor",
+        key="execution_agent_draft_editor",
     )
-    if st.button("确认保存解析任务", type="primary", use_container_width=True):
-        for idx, task in enumerate(parsed):
+    if st.button("确认保存任务指标", type="primary", use_container_width=True):
+        for idx, task in enumerate(draft_tasks):
             if idx < len(edited):
-                for col in ["meeting_month", "owner_type", "owner_name", "theme", "task", "operator", "target_value", "period_start", "period_end", "priority", "status", "notes"]:
-                    if col in edited.columns:
-                        task[col] = edited.iloc[idx].get(col)
-                if "metric" in edited.columns:
-                    metric_label = str(edited.iloc[idx].get("metric") or "")
-                    metric_key = _metric_key_from_label(metric_label) or task.get("metric_key")
-                    task["metric_key"] = metric_key
+                _apply_editor_row(task, edited.iloc[idx])
             add_task(task)
-        st.session_state["parsed_execution_tasks"] = []
-        st.success(f"已保存 {len(parsed)} 条任务")
+        st.session_state["execution_agent_draft_tasks"] = []
+        st.success(f"已保存 {len(draft_tasks)} 条任务指标")
         st.rerun()
 
 
@@ -167,7 +222,13 @@ def _render_task_library(tasks_df: pd.DataFrame) -> None:
 
     st.markdown("#### 导入 / 导出")
     current_json = json.dumps({"tasks": tasks_df.fillna("").to_dict(orient="records")}, ensure_ascii=False, indent=2)
-    st.download_button("导出任务 JSON", data=current_json, file_name="execution_followups.json", mime="application/json", use_container_width=True)
+    st.download_button(
+        "导出任务 JSON",
+        data=current_json,
+        file_name="execution_followups.json",
+        mime="application/json",
+        use_container_width=True,
+    )
     uploaded = st.file_uploader("导入任务 JSON", type=["json"])
     if uploaded is not None and st.button("确认导入并覆盖", use_container_width=True):
         data = json.loads(uploaded.read().decode("utf-8"))
@@ -175,6 +236,28 @@ def _render_task_library(tasks_df: pd.DataFrame) -> None:
         count = save_tasks(imported)
         st.success(f"已导入 {count} 条任务")
         st.rerun()
+
+
+def _execution_agent_llm_config() -> Dict[str, object]:
+    provider = st.session_state.get("decision_agent_provider", DEFAULT_AGENT_PROVIDER)
+    if provider not in AI_PROVIDER_PRESETS:
+        provider = DEFAULT_AGENT_PROVIDER if DEFAULT_AGENT_PROVIDER in AI_PROVIDER_PRESETS else list(AI_PROVIDER_PRESETS)[0]
+    preset = AI_PROVIDER_PRESETS[provider]
+    model = st.session_state.get("decision_agent_model", DEFAULT_AGENT_MODEL)
+    if not model:
+        model = preset["models"][0]
+    base_url = st.session_state.get("decision_agent_base_url", preset["base_url"])
+    api_key, key_source = _get_ai_api_key(provider, "")
+    return {
+        "provider": provider,
+        "model": model,
+        "base_url": base_url,
+        "api_key": api_key,
+        "key_source": key_source,
+        "temperature": 0.4,
+        "max_tokens": DEFAULT_AGENT_MAX_TOKENS,
+        "timeout": DEFAULT_AGENT_TIMEOUT,
+    }
 
 
 def _display_tasks(df: pd.DataFrame) -> pd.DataFrame:
@@ -201,6 +284,29 @@ def _display_tasks(df: pd.DataFrame) -> pd.DataFrame:
     return work[[c for c in cols if c in work.columns]]
 
 
+def _apply_editor_row(task: Dict[str, object], row: pd.Series) -> None:
+    for col in [
+        "meeting_month",
+        "owner_type",
+        "owner_name",
+        "theme",
+        "task",
+        "operator",
+        "target_value",
+        "period_start",
+        "period_end",
+        "priority",
+        "status",
+        "notes",
+    ]:
+        if col in row.index:
+            task[col] = row.get(col)
+    if "metric" in row.index:
+        metric_label = str(row.get("metric") or "")
+        metric_key = _metric_key_from_label(metric_label) or task.get("metric_key")
+        task["metric_key"] = metric_key
+
+
 def _consultant_options(context: Dict[str, object]) -> list[str]:
     df = context.get("consultants_df", pd.DataFrame())
     if df is None or df.empty or "consultant" not in df.columns:
@@ -210,27 +316,12 @@ def _consultant_options(context: Dict[str, object]) -> list[str]:
     return sorted([str(x) for x in df["consultant"].dropna().unique() if str(x).strip()])
 
 
-def _team_options(context: Dict[str, object]) -> list[str]:
-    df = context.get("consultants_df", pd.DataFrame())
-    if df is None or df.empty or "team" not in df.columns:
-        return []
-    return sorted([str(x) for x in df["team"].dropna().unique() if str(x).strip()])
-
-
 def _task_label(df: pd.DataFrame, task_id: str) -> str:
     row = df[df["id"].astype(str).eq(str(task_id))]
     if row.empty:
         return task_id
     item = row.iloc[0]
     return f"{item.get('owner_name')} | {item.get('task')}"
-
-
-def _default_theme(metric_key: str) -> str:
-    if metric_key in {"collection_amount", "offer_unpaid_amount"}:
-        return "现金回款"
-    if metric_key == "weighted_forecast":
-        return "Pipeline"
-    return "顾问产能"
 
 
 def _metric_key_from_label(label: str) -> str:

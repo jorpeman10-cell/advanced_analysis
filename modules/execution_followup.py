@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 import uuid
+import urllib.error
+import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -17,7 +19,9 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "execution_follow
 
 METRIC_DEFINITIONS = {
     "new_bd_clients": {"label": "BD新增客户数", "unit": "count", "default_operator": ">="},
+    "new_projects": {"label": "新增岗位/项目数", "unit": "count", "default_operator": ">="},
     "new_referrals": {"label": "新增推荐数", "unit": "count", "default_operator": ">="},
+    "avg_referrals_per_project": {"label": "平均每岗位推荐数", "unit": "count", "default_operator": ">="},
     "new_interviews": {"label": "新增面试数", "unit": "count", "default_operator": ">="},
     "referral_to_interview_rate": {"label": "推面比", "unit": "percent", "default_operator": ">="},
     "interview_to_offer_rate": {"label": "一面到Offer", "unit": "percent", "default_operator": ">="},
@@ -123,7 +127,9 @@ def parse_management_tasks(text: str, consultants: Iterable[str], config: Dict[s
     meeting_month = str(config.get("end_date") or "")[:7]
     candidates = [
         ("new_bd_clients", [r"BD\s*(\d+)", r"客户\s*(\d+)\s*家"]),
+        ("new_projects", [r"新增.*?岗位\s*(\d+)", r"新增.*?项目\s*(\d+)", r"岗位\s*(\d+)\s*个"]),
         ("new_referrals", [r"推荐\s*(\d+)", r"简历\s*(\d+)"]),
+        ("avg_referrals_per_project", [r"平均.*?岗位.*?推荐.*?(\d+)", r"每.*?岗位.*?推荐.*?(\d+)", r"岗位推荐.*?(\d+)"]),
         ("new_interviews", [r"面试\s*(\d+)", r"一面\s*(\d+)"]),
         ("referral_to_interview_rate", [r"推面比.*?(\d+(?:\.\d+)?)\s*%", r"推荐到面试.*?(\d+(?:\.\d+)?)\s*%"]),
         ("interview_to_offer_rate", [r"一面到\s*Offer.*?(\d+(?:\.\d+)?)\s*%", r"面试到\s*Offer.*?(\d+(?:\.\d+)?)\s*%"]),
@@ -166,6 +172,168 @@ def parse_management_tasks(text: str, consultants: Iterable[str], config: Dict[s
     return tasks
 
 
+def run_task_definition_agent(
+    user_message: str,
+    chat_history: List[Dict[str, str]],
+    consultants: Iterable[str],
+    config: Dict[str, object],
+    llm_config: Dict[str, object],
+) -> Dict[str, object]:
+    """Use an LLM to turn management intent into confirmable metric tasks.
+
+    This is intentionally a task-definition agent only. It should clarify and
+    structure the monthly follow-up plan, but it must not review completion or
+    claim that it has checked system results.
+    """
+    base_url = str(llm_config.get("base_url") or "").rstrip("/")
+    model = str(llm_config.get("model") or "").strip()
+    api_key = str(llm_config.get("api_key") or "").strip()
+    if not base_url or not model or not api_key:
+        raise ValueError("Task Agent requires base_url, model and api_key")
+
+    metric_specs = [
+        {
+            "metric_key": key,
+            "label": value.get("label"),
+            "unit": value.get("unit"),
+            "default_operator": value.get("default_operator"),
+        }
+        for key, value in METRIC_DEFINITIONS.items()
+    ]
+    consultant_list = [str(x) for x in consultants if str(x).strip()]
+    period_start, period_end = _infer_period(user_message, config)
+    meeting_month = str(config.get("end_date") or "")[:7]
+    compact_history = [
+        {"role": item.get("role", "user"), "content": str(item.get("content", ""))[:1200]}
+        for item in (chat_history or [])[-8:]
+        if item.get("content")
+    ]
+    system_prompt = (
+        "你是猎头公司月会执行跟进的任务定义 Agent。你的目标不是简单抽取字段，"
+        "而是通过对话帮助管理者把行动要求澄清成可追踪、可核查的指标任务。\n"
+        "你只能做任务定义，不要核查完成情况，不要声称读取了系统结果。\n"
+        "如果信息不足，先提出1-3个具体澄清问题；如果信息足够，输出任务草案。\n"
+        "任务草案必须使用给定 metric_key，不要自造指标。对象可以是 consultant/team/company。"
+        "金额单位用人民币元，百分比用0-1小数，例如50%写0.5。\n"
+        "你必须只返回JSON，不要Markdown。JSON格式："
+        "{\"status\":\"clarify|draft\",\"assistant_message\":\"...\","
+        "\"tasks\":[{\"owner_type\":\"consultant\",\"owner_name\":\"...\",\"theme\":\"...\","
+        "\"task\":\"...\",\"metric_key\":\"new_interviews\",\"operator\":\">=\","
+        "\"target_value\":5,\"period_start\":\"YYYY-MM-DD\",\"period_end\":\"YYYY-MM-DD\","
+        "\"priority\":\"Medium\",\"notes\":\"...\"}]}"
+    )
+    payload = {
+        "model": model,
+        "temperature": float(llm_config.get("temperature", 0.4)),
+        "max_tokens": int(llm_config.get("max_tokens", 1800)),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "meeting_month": meeting_month,
+                        "default_period_start": period_start,
+                        "default_period_end": period_end,
+                        "supported_metrics": metric_specs,
+                        "known_consultants": consultant_list[:120],
+                        "conversation": compact_history,
+                        "latest_user_message": user_message,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ],
+    }
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=int(llm_config.get("timeout", 90))) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"AI service returned HTTP {exc.code}: {detail[:500]}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"AI service request failed: {exc.reason}") from exc
+
+    content = str(data["choices"][0]["message"]["content"]).strip()
+    result = _loads_agent_json(content)
+    tasks = []
+    for item in result.get("tasks", []) if isinstance(result.get("tasks"), list) else []:
+        task = _normalize_agent_task(item, user_message, meeting_month, period_start, period_end)
+        if task:
+            tasks.append(task)
+    return {
+        "status": result.get("status") or ("draft" if tasks else "clarify"),
+        "assistant_message": str(result.get("assistant_message") or ""),
+        "tasks": tasks,
+        "model": model,
+    }
+
+
+def _loads_agent_json(content: str) -> Dict[str, object]:
+    text = str(content or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"```$", "", text).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(text[start : end + 1])
+        raise
+
+
+def _normalize_agent_task(
+    item: Dict[str, object],
+    source_text: str,
+    meeting_month: str,
+    default_start: str,
+    default_end: str,
+) -> Dict[str, object] | None:
+    if not isinstance(item, dict):
+        return None
+    metric_key = str(item.get("metric_key") or "").strip()
+    if metric_key not in METRIC_DEFINITIONS:
+        return None
+    definition = METRIC_DEFINITIONS[metric_key]
+    operator = str(item.get("operator") or definition.get("default_operator") or ">=").strip()
+    if operator not in OPERATORS:
+        operator = str(definition.get("default_operator") or ">=")
+    try:
+        target_value = float(item.get("target_value") or 0)
+    except (TypeError, ValueError):
+        target_value = 0.0
+    owner_type = str(item.get("owner_type") or "consultant").strip()
+    if owner_type not in OWNER_TYPES:
+        owner_type = "consultant"
+    task_text = str(item.get("task") or "").strip()
+    if not task_text:
+        task_text = f"{definition.get('label', metric_key)} {operator} {_format_value(target_value, definition.get('unit', 'count'))}"
+    return {
+        "meeting_month": str(item.get("meeting_month") or meeting_month),
+        "owner_type": owner_type,
+        "owner_name": str(item.get("owner_name") or "").strip(),
+        "theme": str(item.get("theme") or _infer_theme(metric_key)),
+        "task": task_text,
+        "metric_key": metric_key,
+        "operator": operator,
+        "target_value": target_value,
+        "period_start": str(item.get("period_start") or default_start),
+        "period_end": str(item.get("period_end") or default_end),
+        "priority": str(item.get("priority") or "Medium"),
+        "status": "active",
+        "notes": str(item.get("notes") or "LLM任务定义Agent生成，需人工确认"),
+        "source_text": source_text,
+    }
+
+
 def review_tasks(tasks_df: pd.DataFrame, context: Dict[str, object]) -> pd.DataFrame:
     if tasks_df is None or tasks_df.empty:
         return pd.DataFrame()
@@ -206,7 +374,7 @@ def evidence_for_task(task: Dict[str, object], context: Dict[str, object]) -> pd
 
 
 def _actual_value(metric_key: str, task: Dict[str, object], context: Dict[str, object]) -> Tuple[float, List[dict], str]:
-    if metric_key in {"new_referrals", "new_interviews", "referral_to_interview_rate", "interview_to_offer_rate"}:
+    if metric_key in {"new_projects", "new_referrals", "new_interviews", "avg_referrals_per_project", "referral_to_interview_rate", "interview_to_offer_rate"}:
         return _process_metric(metric_key, task, context)
     if metric_key in {"new_offers", "offer_unpaid_amount"}:
         return _offer_metric(metric_key, task, context)
@@ -228,9 +396,18 @@ def _process_metric(metric_key: str, task: Dict[str, object], context: Dict[str,
     referrals = _filter_date(work, "resume_sent_date", start, end)
     interviews = _filter_date(work, "first_interview_date", start, end)
     offers = _filter_date(work, "offer_date", start, end)
+    if metric_key == "new_projects":
+        if "joborder_id" not in referrals.columns:
+            return 0.0, [], "active_process_df.joborder_id"
+        project_rows = referrals.drop_duplicates("joborder_id", keep="first").copy()
+        evidence = _process_evidence(project_rows)
+        return float(project_rows["joborder_id"].nunique()), evidence, "active_process_df distinct joborder_id with referrals"
     if metric_key == "new_referrals":
         evidence = _process_evidence(referrals)
         return float(len(evidence)), evidence, "active_process_df.resume_sent_date"
+    if metric_key == "avg_referrals_per_project":
+        project_count = referrals["joborder_id"].nunique() if "joborder_id" in referrals.columns else 0
+        return _safe_rate(len(referrals), project_count), _process_evidence(referrals), "active_process_df referrals / distinct joborder_id"
     if metric_key == "new_interviews":
         evidence = _process_evidence(interviews)
         return float(len(evidence)), evidence, "active_process_df.first_interview_date"
@@ -357,7 +534,7 @@ def _infer_period(text: str, config: Dict[str, object]) -> Tuple[str, str]:
 
 
 def _infer_theme(metric_key: str) -> str:
-    if metric_key in {"new_bd_clients", "new_referrals", "new_interviews", "referral_to_interview_rate", "interview_to_offer_rate", "new_offers"}:
+    if metric_key in {"new_bd_clients", "new_projects", "new_referrals", "new_interviews", "avg_referrals_per_project", "referral_to_interview_rate", "interview_to_offer_rate", "new_offers"}:
         return "顾问产能"
     if metric_key in {"collection_amount", "offer_unpaid_amount"}:
         return "现金回款"

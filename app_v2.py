@@ -58,6 +58,28 @@ def load_v2_data(start_date: str, end_date: str, forecast_days: int, cache_versi
     return process_df, forecast_df, collection_df, fiscal_collection_df, consultants_df, cashflow_invoices_df, ytd, offer_outcomes, project_additions
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def load_execution_data(start_date: str, end_date: str, forecast_days: int, cache_version: str):
+    db = GllueDBClient(db_config_manager.get_gllue_db_config())
+    service = V2DataService(db)
+    process_df = service.load_process_data(start_date, end_date)
+    forecast_df = service.load_forecast_data(end_date, forecast_days)
+    collection_df = service.load_collection_data(start_date, end_date)
+    consultants_df = service.load_consultants()
+    offer_outcomes = service.load_offer_outcome_metrics(start_date, end_date)
+    db.close()
+    return process_df, forecast_df, collection_df, consultants_df, offer_outcomes
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_execution_base_data(cache_version: str):
+    db = GllueDBClient(db_config_manager.get_gllue_db_config())
+    service = V2DataService(db)
+    consultants_df = service.load_consultants()
+    db.close()
+    return consultants_df
+
+
 def read_salary_file(uploaded_file) -> pd.DataFrame:
     if uploaded_file is None:
         return pd.DataFrame()
@@ -184,6 +206,31 @@ def build_context(config: dict, salary_df: pd.DataFrame) -> dict:
     }
 
 
+def build_execution_context(config: dict) -> dict:
+    process_df, forecast_df, collection_df, consultants_df, offer_outcomes = load_execution_data(
+        config["start_date"],
+        config["end_date"],
+        config["forecast_days"],
+        DATA_CACHE_VERSION,
+    )
+    active_process_df = filter_active_process_rows(process_df, consultants_df)
+    pipeline = PipelineAnalyzer().analyze(forecast_df, days=config["forecast_days"], analysis_date=config["end_date"])
+    return {
+        "process_df": process_df,
+        "active_process_df": active_process_df,
+        "forecast_df": forecast_df,
+        "collection_df": collection_df,
+        "consultants_df": consultants_df,
+        "offer_outcomes": offer_outcomes,
+        "pipeline": pipeline,
+    }
+
+
+def build_execution_base_context() -> dict:
+    consultants_df = load_execution_base_data(DATA_CACHE_VERSION)
+    return {"consultants_df": consultants_df}
+
+
 def render_sidebar() -> tuple[dict, pd.DataFrame]:
     st.sidebar.title("Three-Speed v2")
     st.sidebar.caption("数据口径：过程转化 + 顾问成本 + 现金流压力")
@@ -224,6 +271,8 @@ def render_sidebar() -> tuple[dict, pd.DataFrame]:
 
     if st.sidebar.button("刷新数据", use_container_width=True):
         load_v2_data.clear()
+        load_execution_data.clear()
+        load_execution_base_data.clear()
         st.rerun()
 
     config = {
@@ -248,25 +297,34 @@ def main() -> None:
         return
 
     config, salary_df = render_sidebar()
+    page_options = ["全景仪表盘", "管理层复盘", "本财年数据", "项目推荐效率", "顾问成本效率", "现金流压力", "执行跟进", "经营决策Agent"]
+    page = st.radio("页面", page_options, horizontal=True, label_visibility="collapsed")
+
+    if page == "执行跟进":
+        context = build_execution_base_context()
+        render_execution_followup(
+            context,
+            config,
+            review_context_loader=lambda: build_execution_context(config),
+        )
+        return
+
     with st.spinner("加载并计算 v2 指标..."):
         context = build_context(config, salary_df)
 
-    tabs = st.tabs(["全景仪表盘", "管理层复盘", "本财年数据", "项目推荐效率", "顾问成本效率", "现金流压力", "执行跟进", "经营决策Agent"])
-    with tabs[0]:
+    if page == "全景仪表盘":
         render_dashboard(context)
-    with tabs[1]:
+    elif page == "管理层复盘":
         render_management_review(context)
-    with tabs[2]:
+    elif page == "本财年数据":
         render_fiscal_ytd(context)
-    with tabs[3]:
+    elif page == "项目推荐效率":
         render_conversion(context)
-    with tabs[4]:
+    elif page == "顾问成本效率":
         render_cost_efficiency(context)
-    with tabs[5]:
+    elif page == "现金流压力":
         render_cashflow(context)
-    with tabs[6]:
-        render_execution_followup(context, config)
-    with tabs[7]:
+    elif page == "经营决策Agent":
         render_decision_agent(context)
 
 

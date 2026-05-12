@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from typing import Dict
+from typing import Callable, Dict
 
 import pandas as pd
 import streamlit as st
@@ -23,7 +23,7 @@ from modules.execution_followup import (
 )
 
 
-def render_execution_followup(context: Dict[str, object], config: Dict[str, object]) -> None:
+def render_execution_followup(context: Dict[str, object], config: Dict[str, object], review_context_loader: Callable[[], Dict[str, object]] | None = None) -> None:
     st.markdown("### 执行跟进")
     st.caption("把月会行动项拆成可核查指标，并直接从系统数据追踪完成情况。")
 
@@ -31,14 +31,17 @@ def render_execution_followup(context: Dict[str, object], config: Dict[str, obje
     consultants = _consultant_options(context)
     teams = _team_options(context)
 
-    tabs = st.tabs(["任务解析", "手动新增", "完成复盘", "任务库"])
-    with tabs[0]:
+    mode = st.radio("执行跟进模式", ["任务解析", "完成核对", "任务库"], horizontal=True, label_visibility="collapsed")
+    if mode == "任务解析":
         _render_parser(config, consultants)
-    with tabs[1]:
-        _render_manual_form(config, consultants, teams)
-    with tabs[2]:
-        _render_review(tasks_df, context)
-    with tabs[3]:
+    elif mode == "完成核对":
+        if review_context_loader is not None:
+            with st.spinner("加载核对数据..."):
+                review_context = review_context_loader()
+        else:
+            review_context = context
+        _render_review(tasks_df, review_context)
+    else:
         _render_task_library(tasks_df)
 
 
@@ -62,64 +65,26 @@ def _render_parser(config: Dict[str, object], consultants: list[str]) -> None:
 
     st.markdown("##### 解析结果")
     preview = pd.DataFrame(parsed)
-    st.dataframe(_display_tasks(preview), use_container_width=True, hide_index=True)
+    edited = st.data_editor(
+        _display_tasks(preview),
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        key="parsed_execution_editor",
+    )
     if st.button("确认保存解析任务", type="primary", use_container_width=True):
-        for task in parsed:
+        for idx, task in enumerate(parsed):
+            if idx < len(edited):
+                for col in ["meeting_month", "owner_type", "owner_name", "theme", "task", "operator", "target_value", "period_start", "period_end", "priority", "status", "notes"]:
+                    if col in edited.columns:
+                        task[col] = edited.iloc[idx].get(col)
+                if "metric" in edited.columns:
+                    metric_label = str(edited.iloc[idx].get("metric") or "")
+                    metric_key = _metric_key_from_label(metric_label) or task.get("metric_key")
+                    task["metric_key"] = metric_key
             add_task(task)
         st.session_state["parsed_execution_tasks"] = []
         st.success(f"已保存 {len(parsed)} 条任务")
-        st.rerun()
-
-
-def _render_manual_form(config: Dict[str, object], consultants: list[str], teams: list[str]) -> None:
-    st.markdown("#### 手动新增任务")
-    metric_options = list(METRIC_DEFINITIONS.keys())
-    owner_type_options = list(OWNER_TYPES.keys())
-    with st.form("execution_task_form"):
-        c1, c2, c3 = st.columns([1, 1, 1])
-        meeting_month = c1.text_input("月会月份", value=str(config.get("end_date", ""))[:7])
-        owner_type = c2.selectbox("责任类型", owner_type_options, format_func=lambda x: OWNER_TYPES[x])
-        if owner_type == "team":
-            owner_name = c3.selectbox("责任对象", teams or [""])
-        elif owner_type == "consultant":
-            owner_name = c3.selectbox("责任对象", consultants or [""])
-        else:
-            owner_name = "Company"
-
-        c4, c5, c6 = st.columns([1, 1, 1])
-        metric_key = c4.selectbox("核查指标", metric_options, format_func=lambda x: METRIC_DEFINITIONS[x]["label"])
-        operator = c5.selectbox("完成条件", OPERATORS, index=OPERATORS.index(METRIC_DEFINITIONS[metric_key]["default_operator"]))
-        target_value = c6.number_input("目标值", value=1.0, step=1.0)
-
-        c7, c8, c9 = st.columns([1, 1, 1])
-        period_start = c7.date_input("核查开始", value=pd.to_datetime(config.get("start_date")).date())
-        period_end = c8.date_input("核查结束", value=pd.to_datetime(config.get("end_date")).date())
-        priority = c9.selectbox("优先级", ["High", "Medium", "Low"], index=1)
-
-        theme = st.text_input("管理主题", value=_default_theme(metric_key))
-        task = st.text_input("任务描述", value=f"{owner_name} {METRIC_DEFINITIONS[metric_key]['label']} {operator} {target_value:g}")
-        notes = st.text_area("备注", height=80)
-        submitted = st.form_submit_button("保存任务", type="primary", use_container_width=True)
-
-    if submitted:
-        add_task(
-            {
-                "meeting_month": meeting_month,
-                "owner_type": owner_type,
-                "owner_name": owner_name,
-                "theme": theme,
-                "task": task,
-                "metric_key": metric_key,
-                "operator": operator,
-                "target_value": target_value,
-                "period_start": period_start.isoformat(),
-                "period_end": period_end.isoformat(),
-                "priority": priority,
-                "status": "active",
-                "notes": notes,
-            }
-        )
-        st.success("任务已保存")
         st.rerun()
 
 
@@ -255,3 +220,10 @@ def _default_theme(metric_key: str) -> str:
     if metric_key == "weighted_forecast":
         return "Pipeline"
     return "顾问产能"
+
+
+def _metric_key_from_label(label: str) -> str:
+    for key, definition in METRIC_DEFINITIONS.items():
+        if str(definition.get("label")) == str(label):
+            return key
+    return ""

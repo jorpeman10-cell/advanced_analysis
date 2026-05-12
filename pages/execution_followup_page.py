@@ -254,7 +254,7 @@ def _execution_agent_llm_config() -> Dict[str, object]:
         "base_url": base_url,
         "api_key": api_key,
         "key_source": key_source,
-        "temperature": 0.4,
+        "temperature": 1.0,
         "max_tokens": DEFAULT_AGENT_MAX_TOKENS,
         "timeout": DEFAULT_AGENT_TIMEOUT,
     }

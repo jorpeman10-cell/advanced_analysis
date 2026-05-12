@@ -141,24 +141,28 @@ def _render_manual_task_builder(config: Dict[str, object], consultants: list[str
         placeholder="可选，例如：5月月会行动项 / 下月改善计划",
         key="manual_task_note",
     )
-    if st.button("保存任务指标", type="primary", use_container_width=True):
+    save_clicked = st.button("保存任务指标", type="primary", use_container_width=True)
+    if save_clicked:
         if not owner_name:
             st.error("请先选择或输入任务对象。")
             return
         if not metric_entries:
             st.error("请先选择至少一个指标。")
             return
-        for entry in metric_entries:
-            metric_key = entry["metric_key"]
-            definition = entry["definition"]
-            operator = entry["operator"]
-            target_value = entry["target_value"]
-            metric_label = entry["metric_label"]
-            task_text = f"{metric_label} {operator} {_format_target_for_task(target_value, definition.get('unit', 'count'))}"
-            if task_note:
-                task_text = f"{task_note}：{task_text}"
-            add_task(
-                {
+        with st.spinner("正在保存任务指标..."):
+            existing = load_tasks()
+            saved_count = 0
+            skipped_count = 0
+            for entry in metric_entries:
+                metric_key = entry["metric_key"]
+                definition = entry["definition"]
+                operator = entry["operator"]
+                target_value = entry["target_value"]
+                metric_label = entry["metric_label"]
+                task_text = f"{metric_label} {operator} {_format_target_for_task(target_value, definition.get('unit', 'count'))}"
+                if task_note:
+                    task_text = f"{task_note}：{task_text}"
+                payload = {
                     "meeting_month": str(config.get("end_date") or "")[:7],
                     "owner_type": owner_type,
                     "owner_name": owner_name,
@@ -174,8 +178,16 @@ def _render_manual_task_builder(config: Dict[str, object], consultants: list[str
                     "notes": "手动指标选项录入",
                     "source_text": task_text,
                 }
-            )
-        st.success(f"已保存 {len(metric_entries)} 条任务指标")
+                if _is_duplicate_task(existing, payload):
+                    skipped_count += 1
+                    continue
+                add_task(payload)
+                existing = pd.concat([existing, pd.DataFrame([payload])], ignore_index=True)
+                saved_count += 1
+        if saved_count:
+            st.success(f"已保存 {saved_count} 条任务指标" + (f"，跳过 {skipped_count} 条重复任务" if skipped_count else ""))
+        else:
+            st.warning(f"没有新增任务，已跳过 {skipped_count} 条重复任务。")
         st.rerun()
 
 
@@ -490,6 +502,30 @@ def _filter_tasks_by_review_period(tasks_df: pd.DataFrame, review_start: object,
     missing = task_start.isna() | task_end.isna()
     overlaps = missing | ((task_start.dt.normalize() <= end.normalize()) & (task_end.dt.normalize() >= start.normalize()))
     return work[overlaps].copy()
+
+
+def _is_duplicate_task(existing: pd.DataFrame, payload: Dict[str, object]) -> bool:
+    if existing is None or existing.empty:
+        return False
+    work = existing.copy()
+    checks = {
+        "meeting_month": str(payload.get("meeting_month") or ""),
+        "owner_type": str(payload.get("owner_type") or ""),
+        "owner_name": str(payload.get("owner_name") or ""),
+        "metric_key": str(payload.get("metric_key") or ""),
+        "operator": str(payload.get("operator") or ""),
+        "period_start": str(payload.get("period_start") or ""),
+        "period_end": str(payload.get("period_end") or ""),
+        "status": str(payload.get("status") or "active"),
+    }
+    mask = pd.Series(True, index=work.index)
+    for col, value in checks.items():
+        if col not in work.columns:
+            return False
+        mask &= work[col].fillna("").astype(str).eq(value)
+    target = pd.to_numeric(work.get("target_value"), errors="coerce").fillna(0)
+    mask &= (target - float(payload.get("target_value") or 0)).abs() < 0.000001
+    return bool(mask.any())
 
 
 def _apply_editor_row(task: Dict[str, object], row: pd.Series) -> None:

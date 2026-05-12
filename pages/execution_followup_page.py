@@ -75,15 +75,56 @@ def _render_manual_task_builder(config: Dict[str, object], consultants: list[str
     else:
         owner_name = "Company"
 
-    c1, c2, c3 = st.columns([1.3, 0.8, 0.9])
-    with c1:
-        metric_label = st.selectbox("指标", metric_labels, key="manual_task_metric")
-    metric_key = _metric_key_from_label(metric_label)
-    definition = METRIC_DEFINITIONS.get(metric_key, {})
-    with c2:
-        operator = st.selectbox("判断", [">=", "<=", "="], index=0, key="manual_task_operator")
-    with c3:
-        target_value = st.number_input("目标值", value=1.0, step=1.0, key="manual_task_target")
+    entry_mode = st.radio("录入方式", ["单个指标", "多个指标"], horizontal=True, key="manual_task_entry_mode")
+    metric_entries = []
+    if entry_mode == "单个指标":
+        c1, c2, c3 = st.columns([1.3, 0.8, 0.9])
+        with c1:
+            metric_label = st.selectbox("指标", metric_labels, key="manual_task_metric")
+        metric_key = _metric_key_from_label(metric_label)
+        definition = METRIC_DEFINITIONS.get(metric_key, {})
+        with c2:
+            operator = st.selectbox("判断", [">=", "<=", "="], index=0, key="manual_task_operator")
+        with c3:
+            target_value = st.number_input("目标值", value=1.0, step=1.0, key="manual_task_target")
+        metric_entries.append(
+            {
+                "metric_label": metric_label,
+                "metric_key": metric_key,
+                "definition": definition,
+                "operator": operator,
+                "target_value": float(target_value or 0),
+            }
+        )
+    else:
+        selected_metric_labels = st.multiselect(
+            "选择多个指标",
+            metric_labels,
+            default=metric_labels[:2] if len(metric_labels) >= 2 else metric_labels,
+            key="manual_task_metrics_multi",
+        )
+        for metric_label in selected_metric_labels:
+            metric_key = _metric_key_from_label(metric_label)
+            definition = METRIC_DEFINITIONS.get(metric_key, {})
+            c1, c2, c3 = st.columns([1.3, 0.8, 0.9])
+            with c1:
+                st.text_input("指标", value=metric_label, disabled=True, key=f"manual_task_metric_name_{metric_key}")
+            with c2:
+                default_operator = str(definition.get("default_operator") or ">=")
+                operator_options = [">=", "<=", "="]
+                default_index = operator_options.index(default_operator) if default_operator in operator_options else 0
+                operator = st.selectbox("判断", operator_options, index=default_index, key=f"manual_task_operator_{metric_key}")
+            with c3:
+                target_value = st.number_input("目标值", value=1.0, step=1.0, key=f"manual_task_target_{metric_key}")
+            metric_entries.append(
+                {
+                    "metric_label": metric_label,
+                    "metric_key": metric_key,
+                    "definition": definition,
+                    "operator": operator,
+                    "target_value": float(target_value or 0),
+                }
+            )
 
     c4, c5, c6 = st.columns([1, 1, 1])
     default_start, default_end = _default_assessment_period(config)
@@ -94,34 +135,47 @@ def _render_manual_task_builder(config: Dict[str, object], consultants: list[str
     with c6:
         priority = st.selectbox("优先级", ["High", "Medium", "Low"], index=1, key="manual_task_priority")
 
-    task_text = st.text_input(
-        "任务说明",
-        value=f"{metric_label} {operator} {_format_target_for_task(target_value, definition.get('unit', 'count'))}",
-        key="manual_task_text",
+    task_note = st.text_input(
+        "任务说明前缀",
+        value="",
+        placeholder="可选，例如：5月月会行动项 / 下月改善计划",
+        key="manual_task_note",
     )
     if st.button("保存任务指标", type="primary", use_container_width=True):
         if not owner_name:
             st.error("请先选择或输入任务对象。")
             return
-        add_task(
-            {
-                "meeting_month": str(config.get("end_date") or "")[:7],
-                "owner_type": owner_type,
-                "owner_name": owner_name,
-                "theme": _theme_for_metric(metric_key),
-                "task": task_text,
-                "metric_key": metric_key,
-                "operator": operator,
-                "target_value": float(target_value or 0),
-                "period_start": pd.to_datetime(period_start).date().isoformat(),
-                "period_end": pd.to_datetime(period_end).date().isoformat(),
-                "priority": priority,
-                "status": "active",
-                "notes": "手动指标选项录入",
-                "source_text": task_text,
-            }
-        )
-        st.success("已保存任务指标")
+        if not metric_entries:
+            st.error("请先选择至少一个指标。")
+            return
+        for entry in metric_entries:
+            metric_key = entry["metric_key"]
+            definition = entry["definition"]
+            operator = entry["operator"]
+            target_value = entry["target_value"]
+            metric_label = entry["metric_label"]
+            task_text = f"{metric_label} {operator} {_format_target_for_task(target_value, definition.get('unit', 'count'))}"
+            if task_note:
+                task_text = f"{task_note}：{task_text}"
+            add_task(
+                {
+                    "meeting_month": str(config.get("end_date") or "")[:7],
+                    "owner_type": owner_type,
+                    "owner_name": owner_name,
+                    "theme": _theme_for_metric(metric_key),
+                    "task": task_text,
+                    "metric_key": metric_key,
+                    "operator": operator,
+                    "target_value": float(target_value or 0),
+                    "period_start": pd.to_datetime(period_start).date().isoformat(),
+                    "period_end": pd.to_datetime(period_end).date().isoformat(),
+                    "priority": priority,
+                    "status": "active",
+                    "notes": "手动指标选项录入",
+                    "source_text": task_text,
+                }
+            )
+        st.success(f"已保存 {len(metric_entries)} 条任务指标")
         st.rerun()
 
 

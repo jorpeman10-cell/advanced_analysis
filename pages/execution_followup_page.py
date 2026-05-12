@@ -56,10 +56,99 @@ def _render_task_definition(config: Dict[str, object], consultants: list[str]) -
     st.markdown("#### 管理任务指标录入")
     st.caption("优先用指标下拉框定义任务，避免模型误解业务表达。Agent 只作为辅助整理，不影响你手动选择指标口径。")
 
+    _render_management_goal_builder(config, consultants)
+    st.divider()
     _render_manual_task_builder(config, consultants)
 
     with st.expander("任务 Agent 辅助整理", expanded=False):
         _render_task_agent(config, consultants)
+
+
+def _render_management_goal_builder(config: Dict[str, object], consultants: list[str]) -> None:
+    st.markdown("##### 管理目标")
+    st.caption("记录方向型目标，例如客户结构调整、目标客户/岗位/领域突破；下面再添加可量化行为指标。")
+    with st.expander("新增管理目标", expanded=True):
+        owner_type = st.selectbox("目标对象类型", ["consultant", "team", "company"], key="goal_owner_type")
+        if owner_type == "consultant":
+            owner_name = st.selectbox("Consultant", consultants or [""], key="goal_owner_name")
+        elif owner_type == "team":
+            owner_name = st.text_input("团队", key="goal_owner_team", placeholder="例如：CMC / 临床 / 销售")
+        else:
+            owner_name = "Company"
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            goal_type = st.selectbox(
+                "目标类型",
+                ["客户结构调整", "目标客户突破", "岗位领域调整", "BD方向调整", "交付质量改善", "其他"],
+                key="goal_type",
+            )
+        with c2:
+            priority = st.selectbox("目标优先级", ["High", "Medium", "Low"], index=1, key="goal_priority")
+
+        c3, c4, c5 = st.columns([1, 1, 1])
+        with c3:
+            target_customer = st.text_input("目标客户", key="goal_target_customer", placeholder="例如：亚虹医药 / 内资创新药")
+        with c4:
+            target_domain = st.text_input("目标领域", key="goal_target_domain", placeholder="例如：CMC / 临床 / 商业化")
+        with c5:
+            target_position = st.text_input("目标岗位", key="goal_target_position", placeholder="例如：生产负责人 / 注册 / BD")
+
+        goal_direction = st.text_area(
+            "方向说明",
+            key="goal_direction",
+            height=80,
+            placeholder="例如：下月重点从外资客户转向内资创新药客户，优先BD CMC生产/质量岗位。",
+        )
+
+        default_start, default_end = _default_assessment_period(config)
+        c6, c7, c8 = st.columns([1, 1, 1])
+        with c6:
+            period_start = st.date_input("目标开始日期", value=default_start, key="goal_period_start")
+        with c7:
+            period_end = st.date_input("目标结束日期", value=default_end, key="goal_period_end")
+        with c8:
+            weekly_check_day = st.selectbox("每周提醒", ["周一", "周二", "周三", "周四", "周五"], index=0, key="goal_weekly_day")
+
+        if st.button("保存管理目标", use_container_width=True):
+            if not owner_name:
+                st.error("请先选择或输入目标对象。")
+                return
+            if not any([target_customer, target_domain, target_position, goal_direction]):
+                st.error("请至少填写目标客户、领域、岗位或方向说明。")
+                return
+            task_text = _build_goal_task_text(goal_type, target_customer, target_domain, target_position, goal_direction)
+            payload = {
+                "meeting_month": str(config.get("end_date") or "")[:7],
+                "owner_type": owner_type,
+                "owner_name": owner_name,
+                "theme": "管理目标",
+                "task": task_text,
+                "metric_key": "management_goal",
+                "operator": "=",
+                "target_value": 0,
+                "period_start": pd.to_datetime(period_start).date().isoformat(),
+                "period_end": pd.to_datetime(period_end).date().isoformat(),
+                "priority": priority,
+                "status": "active",
+                "notes": "管理方向目标，需结合下方量化行为指标跟进",
+                "source_text": goal_direction,
+                "goal_type": goal_type,
+                "target_customer": target_customer,
+                "target_domain": target_domain,
+                "target_position": target_position,
+                "goal_direction": goal_direction,
+                "weekly_check_day": weekly_check_day,
+                "next_check_date": _next_weekly_check_date(weekly_check_day),
+                "progress_note": "",
+            }
+            if _is_duplicate_task(load_tasks(), payload):
+                st.warning("该管理目标已存在，未重复保存。")
+                return
+            with st.spinner("正在保存管理目标..."):
+                add_task(payload)
+            st.success("已保存管理目标。请继续在下方添加对应的行为/结果指标。")
+            st.rerun()
 
 
 def _render_manual_task_builder(config: Dict[str, object], consultants: list[str]) -> None:
@@ -314,20 +403,25 @@ def _render_review(
     active = _filter_tasks_by_review_period(active, review_start, review_end)
     if override_period and not active.empty:
         active = active.copy()
-        active["period_start"] = pd.to_datetime(review_start).date().isoformat()
-        active["period_end"] = pd.to_datetime(review_end).date().isoformat()
+        metric_mask = ~active["metric_key"].astype(str).eq("management_goal")
+        active.loc[metric_mask, "period_start"] = pd.to_datetime(review_start).date().isoformat()
+        active.loc[metric_mask, "period_end"] = pd.to_datetime(review_end).date().isoformat()
     if active.empty:
         st.info("当前考核周期内没有可复盘任务。")
         return
+
+    goals = active[active["metric_key"].astype(str).eq("management_goal")].copy()
+    _render_goal_followup(goals)
 
     if review_context_loader is not None:
         with st.spinner("加载核对数据..."):
             context = review_context_loader()
     else:
         context = base_context
-    reviewed = review_tasks(active, context)
+    metric_tasks = active[~active["metric_key"].astype(str).eq("management_goal")].copy()
+    reviewed = review_tasks(metric_tasks, context)
     if reviewed.empty:
-        st.info("暂无可复盘任务。")
+        st.info("暂无可量化复盘任务。")
         return
 
     summary_cols = [
@@ -402,6 +496,37 @@ def _render_task_library(tasks_df: pd.DataFrame) -> None:
         st.rerun()
 
 
+def _render_goal_followup(goals_df: pd.DataFrame) -> None:
+    st.markdown("#### 管理目标周跟进")
+    if goals_df is None or goals_df.empty:
+        st.info("当前周期内没有管理目标。")
+        return
+    display = goals_df.copy()
+    today = pd.Timestamp.today().normalize()
+    next_dates = pd.to_datetime(display.get("next_check_date"), errors="coerce").dt.normalize()
+    display["提醒状态"] = ["本周/已到期" if pd.notna(d) and d <= today else "未到提醒" for d in next_dates]
+    display["目标状态"] = display["status"].fillna("").replace("", "active")
+    cols = [
+        "owner_name",
+        "goal_type",
+        "target_customer",
+        "target_domain",
+        "target_position",
+        "goal_direction",
+        "weekly_check_day",
+        "next_check_date",
+        "提醒状态",
+        "目标状态",
+        "progress_note",
+    ]
+    st.dataframe(display[[c for c in cols if c in display.columns]], use_container_width=True, hide_index=True)
+    due_count = int((next_dates <= today).fillna(False).sum())
+    c1, c2, c3 = st.columns(3)
+    c1.metric("管理目标数", len(display))
+    c2.metric("本周需跟进", due_count)
+    c3.metric("高优先级", int(display["priority"].astype(str).eq("High").sum()) if "priority" in display.columns else 0)
+
+
 def _execution_agent_llm_config() -> Dict[str, object]:
     provider = st.session_state.get("decision_agent_provider", DEFAULT_AGENT_PROVIDER)
     if provider not in AI_PROVIDER_PRESETS:
@@ -443,6 +568,13 @@ def _display_tasks(df: pd.DataFrame) -> pd.DataFrame:
         "period_end",
         "priority",
         "status",
+        "goal_type",
+        "target_customer",
+        "target_domain",
+        "target_position",
+        "weekly_check_day",
+        "next_check_date",
+        "progress_note",
         "notes",
     ]
     return work[[c for c in cols if c in work.columns]]
@@ -523,9 +655,34 @@ def _is_duplicate_task(existing: pd.DataFrame, payload: Dict[str, object]) -> bo
         if col not in work.columns:
             return False
         mask &= work[col].fillna("").astype(str).eq(value)
+    if str(payload.get("metric_key") or "") == "management_goal" and "task" in work.columns:
+        mask &= work["task"].fillna("").astype(str).eq(str(payload.get("task") or ""))
     target = pd.to_numeric(work.get("target_value"), errors="coerce").fillna(0)
     mask &= (target - float(payload.get("target_value") or 0)).abs() < 0.000001
     return bool(mask.any())
+
+
+def _build_goal_task_text(goal_type: str, customer: str, domain: str, position: str, direction: str) -> str:
+    parts = [str(goal_type or "").strip()]
+    if customer:
+        parts.append(f"客户：{customer}")
+    if domain:
+        parts.append(f"领域：{domain}")
+    if position:
+        parts.append(f"岗位：{position}")
+    if direction:
+        parts.append(f"方向：{direction}")
+    return " | ".join([part for part in parts if part])
+
+
+def _next_weekly_check_date(day_label: str) -> str:
+    weekday_map = {"周一": 0, "周二": 1, "周三": 2, "周四": 3, "周五": 4}
+    target = weekday_map.get(str(day_label), 0)
+    today = pd.Timestamp.today().normalize()
+    delta = (target - today.weekday()) % 7
+    if delta == 0:
+        delta = 7
+    return (today + pd.Timedelta(days=delta)).date().isoformat()
 
 
 def _apply_editor_row(task: Dict[str, object], row: pd.Series) -> None:

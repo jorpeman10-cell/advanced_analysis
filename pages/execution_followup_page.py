@@ -46,7 +46,7 @@ def _render_parser(config: Dict[str, object], consultants: list[str]) -> None:
     st.markdown("#### 管理任务解析")
     text = st.text_area(
         "输入月会行动项",
-        placeholder="例如：Larry 下个月改善：BD 2家客户，新增面试5个，推面比50%，新增Offer 1个",
+        placeholder="例如：Consultant 下个月改善：BD 2家客户，新增面试5个，推面比50%，新增Offer 1个",
         height=110,
     )
     parsed = []

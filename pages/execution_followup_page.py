@@ -40,12 +40,12 @@ def render_execution_followup(
 
     mode = st.radio(
         "执行跟进模式",
-        ["任务定义 Agent", "完成核对", "任务库"],
+        ["指标录入", "完成核对", "任务库"],
         horizontal=True,
         label_visibility="collapsed",
     )
-    if mode == "任务定义 Agent":
-        _render_task_agent(config, consultants)
+    if mode == "指标录入":
+        _render_task_definition(config, consultants)
     elif mode == "完成核对":
         if review_context_loader is not None:
             with st.spinner("加载核对数据..."):
@@ -57,9 +57,83 @@ def render_execution_followup(
         _render_task_library(tasks_df)
 
 
+def _render_task_definition(config: Dict[str, object], consultants: list[str]) -> None:
+    st.markdown("#### 管理任务指标录入")
+    st.caption("优先用指标下拉框定义任务，避免模型误解业务表达。Agent 只作为辅助整理，不影响你手动选择指标口径。")
+
+    _render_manual_task_builder(config, consultants)
+
+    with st.expander("任务 Agent 辅助整理", expanded=False):
+        _render_task_agent(config, consultants)
+
+
+def _render_manual_task_builder(config: Dict[str, object], consultants: list[str]) -> None:
+    _render_metric_reference()
+    st.markdown("##### 新增任务指标")
+    metric_labels = _metric_label_options()
+    owner_type = st.selectbox("对象类型", ["consultant", "team", "company"], key="manual_task_owner_type")
+    owner_name = ""
+    if owner_type == "consultant":
+        owner_name = st.selectbox("Consultant", consultants or [""], key="manual_task_owner_name")
+    elif owner_type == "team":
+        owner_name = st.text_input("团队", key="manual_task_owner_team", placeholder="例如：临床 / 销售 / MA&GA")
+    else:
+        owner_name = "Company"
+
+    c1, c2, c3 = st.columns([1.3, 0.8, 0.9])
+    with c1:
+        metric_label = st.selectbox("指标", metric_labels, key="manual_task_metric")
+    metric_key = _metric_key_from_label(metric_label)
+    definition = METRIC_DEFINITIONS.get(metric_key, {})
+    with c2:
+        operator = st.selectbox("判断", [">=", "<=", "="], index=0, key="manual_task_operator")
+    with c3:
+        target_value = st.number_input("目标值", value=1.0, step=1.0, key="manual_task_target")
+
+    c4, c5, c6 = st.columns([1, 1, 1])
+    default_start = str(config.get("start_date") or "")
+    default_end = str(config.get("end_date") or "")
+    with c4:
+        period_start = st.text_input("核查开始日期", value=default_start, key="manual_task_period_start")
+    with c5:
+        period_end = st.text_input("核查结束日期", value=default_end, key="manual_task_period_end")
+    with c6:
+        priority = st.selectbox("优先级", ["High", "Medium", "Low"], index=1, key="manual_task_priority")
+
+    task_text = st.text_input(
+        "任务说明",
+        value=f"{metric_label} {operator} {_format_target_for_task(target_value, definition.get('unit', 'count'))}",
+        key="manual_task_text",
+    )
+    if st.button("保存任务指标", type="primary", use_container_width=True):
+        if not owner_name:
+            st.error("请先选择或输入任务对象。")
+            return
+        add_task(
+            {
+                "meeting_month": str(config.get("end_date") or "")[:7],
+                "owner_type": owner_type,
+                "owner_name": owner_name,
+                "theme": _theme_for_metric(metric_key),
+                "task": task_text,
+                "metric_key": metric_key,
+                "operator": operator,
+                "target_value": float(target_value or 0),
+                "period_start": period_start,
+                "period_end": period_end,
+                "priority": priority,
+                "status": "active",
+                "notes": "手动指标选项录入",
+                "source_text": task_text,
+            }
+        )
+        st.success("已保存任务指标")
+        st.rerun()
+
+
 def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> None:
-    st.markdown("#### 管理任务定义 Agent")
-    st.caption("先通过对话澄清管理动作，再生成可核查指标。解析阶段不扫描完成结果，完成核对在单独模式里执行。")
+    st.markdown("##### Agent 对话")
+    st.caption("用于把自然语言整理成草案；保存前仍需在下拉指标表格中确认口径。")
 
     llm_config = _execution_agent_llm_config()
     with st.expander("模型连接", expanded=False):
@@ -368,6 +442,14 @@ def _metric_key_from_label(label: str) -> str:
         if str(definition.get("label")) == str(label):
             return key
     return ""
+
+
+def _format_target_for_task(value: float, unit: str) -> str:
+    if unit == "percent":
+        return f"{float(value):.0%}" if float(value) <= 1 else f"{float(value):.0f}%"
+    if unit == "money":
+        return f"¥{float(value):,.0f}"
+    return f"{float(value):g}"
 
 
 def _theme_for_metric(metric_key: str) -> str:

@@ -470,9 +470,17 @@ def _render_task_library(tasks_df: pd.DataFrame) -> None:
     if tasks_df.empty:
         st.info("任务库为空。")
     else:
-        st.dataframe(_display_tasks(tasks_df), use_container_width=True, hide_index=True)
-        ids = tasks_df["id"].astype(str).tolist()
-        selected = st.multiselect("选择要删除的任务", ids, format_func=lambda x: _task_label(tasks_df, x))
+        filtered = _task_library_filters(tasks_df)
+        if filtered.empty:
+            st.info("当前筛选条件下没有任务。")
+        else:
+            _render_grouped_task_list(filtered)
+
+        with st.expander("原始明细", expanded=False):
+            st.dataframe(_display_tasks(filtered), use_container_width=True, hide_index=True)
+
+        ids = filtered["id"].astype(str).tolist()
+        selected = st.multiselect("选择要删除的任务", ids, format_func=lambda x: _task_label(filtered, x))
         if st.button("删除所选任务", disabled=not selected, use_container_width=True):
             deleted = delete_tasks(selected)
             st.success(f"已删除 {deleted} 条任务")
@@ -525,6 +533,102 @@ def _render_goal_followup(goals_df: pd.DataFrame) -> None:
     c1.metric("管理目标数", len(display))
     c2.metric("本周需跟进", due_count)
     c3.metric("高优先级", int(display["priority"].astype(str).eq("High").sum()) if "priority" in display.columns else 0)
+
+
+def _task_library_filters(tasks_df: pd.DataFrame) -> pd.DataFrame:
+    work = tasks_df.copy()
+    work["task_kind"] = work["metric_key"].astype(str).apply(lambda x: "管理目标" if x == "management_goal" else "量化指标")
+    c1, c2, c3, c4 = st.columns([1, 1, 1.2, 1])
+    with c1:
+        months = ["全部"] + sorted([str(x) for x in work["meeting_month"].dropna().unique() if str(x)])
+        month = st.selectbox("月份", months, key="task_library_month")
+    with c2:
+        kinds = ["全部", "管理目标", "量化指标"]
+        kind = st.selectbox("类型", kinds, key="task_library_kind")
+    with c3:
+        owners = ["全部"] + sorted([str(x) for x in work["owner_name"].dropna().unique() if str(x)])
+        owner = st.selectbox("对象", owners, key="task_library_owner")
+    with c4:
+        statuses = ["全部"] + sorted([str(x) for x in work["status"].fillna("").unique() if str(x)])
+        status = st.selectbox("状态", statuses, key="task_library_status")
+
+    if month != "全部":
+        work = work[work["meeting_month"].astype(str).eq(month)]
+    if kind != "全部":
+        work = work[work["task_kind"].eq(kind)]
+    if owner != "全部":
+        work = work[work["owner_name"].astype(str).eq(owner)]
+    if status != "全部":
+        work = work[work["status"].astype(str).eq(status)]
+    return work.copy()
+
+
+def _render_grouped_task_list(tasks_df: pd.DataFrame) -> None:
+    summary = (
+        tasks_df.assign(
+            is_goal=tasks_df["metric_key"].astype(str).eq("management_goal"),
+            is_metric=~tasks_df["metric_key"].astype(str).eq("management_goal"),
+        )
+        .groupby(["owner_type", "owner_name"], dropna=False)
+        .agg(
+            task_count=("id", "count"),
+            goal_count=("is_goal", "sum"),
+            metric_count=("is_metric", "sum"),
+            high_count=("priority", lambda s: int(s.astype(str).eq("High").sum())),
+        )
+        .reset_index()
+        .sort_values(["owner_type", "owner_name"])
+    )
+    c1, c2, c3 = st.columns(3)
+    c1.metric("对象数", len(summary))
+    c2.metric("管理目标", int(summary["goal_count"].sum()))
+    c3.metric("量化指标", int(summary["metric_count"].sum()))
+
+    for _, row in summary.iterrows():
+        owner_type = str(row.get("owner_type") or "")
+        owner_name = str(row.get("owner_name") or "")
+        owner_tasks = tasks_df[
+            tasks_df["owner_type"].astype(str).eq(owner_type)
+            & tasks_df["owner_name"].astype(str).eq(owner_name)
+        ].copy()
+        title = (
+            f"{owner_name or '(未指定对象)'} | {owner_type} | "
+            f"{int(row['goal_count'])} 个管理目标 / {int(row['metric_count'])} 个量化指标"
+        )
+        with st.expander(title, expanded=False):
+            goals = owner_tasks[owner_tasks["metric_key"].astype(str).eq("management_goal")].copy()
+            metrics = owner_tasks[~owner_tasks["metric_key"].astype(str).eq("management_goal")].copy()
+            if not goals.empty:
+                st.markdown("**管理目标**")
+                goal_cols = [
+                    "meeting_month",
+                    "goal_type",
+                    "target_customer",
+                    "target_domain",
+                    "target_position",
+                    "goal_direction",
+                    "weekly_check_day",
+                    "next_check_date",
+                    "priority",
+                    "status",
+                ]
+                st.dataframe(goals[[c for c in goal_cols if c in goals.columns]], use_container_width=True, hide_index=True)
+            if not metrics.empty:
+                st.markdown("**量化指标**")
+                metric_display = _display_tasks(metrics)
+                metric_cols = [
+                    "meeting_month",
+                    "theme",
+                    "task",
+                    "metric",
+                    "operator",
+                    "target_value",
+                    "period_start",
+                    "period_end",
+                    "priority",
+                    "status",
+                ]
+                st.dataframe(metric_display[[c for c in metric_cols if c in metric_display.columns]], use_container_width=True, hide_index=True)
 
 
 def _execution_agent_llm_config() -> Dict[str, object]:

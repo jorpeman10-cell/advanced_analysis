@@ -18,6 +18,7 @@ from modules.project_progress_analyzer import ProjectProgressAnalyzer
 from modules.salary_store import load_salary_df, normalize_salary_df, save_salary_df
 from modules.v2_data_service import V2DataService
 from pages.decision_agent_page import render_decision_agent
+from pages.execution_followup_page import render_execution_followup
 from pages.v2_dashboard import (
     render_cashflow,
     render_conversion,
@@ -250,7 +251,7 @@ def main() -> None:
     with st.spinner("加载并计算 v2 指标..."):
         context = build_context(config, salary_df)
 
-    tabs = st.tabs(["全景仪表盘", "管理层复盘", "本财年数据", "项目推荐效率", "顾问成本效率", "现金流压力", "经营决策Agent"])
+    tabs = st.tabs(["全景仪表盘", "管理层复盘", "本财年数据", "项目推荐效率", "顾问成本效率", "现金流压力", "执行跟进", "经营决策Agent"])
     with tabs[0]:
         render_dashboard(context)
     with tabs[1]:
@@ -264,6 +265,8 @@ def main() -> None:
     with tabs[5]:
         render_cashflow(context)
     with tabs[6]:
+        render_execution_followup(context, config)
+    with tabs[7]:
         render_decision_agent(context)
 
 

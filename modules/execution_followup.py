@@ -19,9 +19,10 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "execution_follow
 
 METRIC_DEFINITIONS = {
     "new_bd_clients": {"label": "BD新增客户数", "unit": "count", "default_operator": ">="},
+    "new_case_bd": {"label": "新增Case BD数", "unit": "count", "default_operator": ">="},
     "new_projects": {"label": "新增岗位/项目数", "unit": "count", "default_operator": ">="},
     "new_referrals": {"label": "新增推荐数", "unit": "count", "default_operator": ">="},
-    "avg_referrals_per_project": {"label": "平均每岗位推荐数", "unit": "count", "default_operator": ">="},
+    "avg_referrals_per_project": {"label": "平均推荐量", "unit": "count", "default_operator": ">="},
     "new_interviews": {"label": "新增面试数", "unit": "count", "default_operator": ">="},
     "referral_to_interview_rate": {"label": "推面比", "unit": "percent", "default_operator": ">="},
     "interview_to_offer_rate": {"label": "一面到Offer", "unit": "percent", "default_operator": ">="},
@@ -126,10 +127,11 @@ def parse_management_tasks(text: str, consultants: Iterable[str], config: Dict[s
     period_start, period_end = _infer_period(text, config)
     meeting_month = str(config.get("end_date") or "")[:7]
     candidates = [
-        ("new_bd_clients", [r"BD\s*(\d+)", r"客户\s*(\d+)\s*家"]),
+        ("new_case_bd", [r"Case\s*BD\s*(\d+)", r"新增\s*Case\s*BD\s*(\d+)", r"新增.*?BD.*?Case\s*(\d+)"]),
+        ("new_bd_clients", [r"BD\s*(\d+)\s*家客户", r"BD\s*客户\s*(\d+)", r"客户\s*(\d+)\s*家"]),
         ("new_projects", [r"新增.*?岗位\s*(\d+)", r"新增.*?项目\s*(\d+)", r"岗位\s*(\d+)\s*个"]),
         ("new_referrals", [r"推荐\s*(\d+)", r"简历\s*(\d+)"]),
-        ("avg_referrals_per_project", [r"平均.*?岗位.*?推荐.*?(\d+)", r"每.*?岗位.*?推荐.*?(\d+)", r"岗位推荐.*?(\d+)"]),
+        ("avg_referrals_per_project", [r"平均.*?岗位.*?推荐.*?(\d+)", r"平均推荐量\s*(\d+)", r"每.*?岗位.*?推荐.*?(\d+)", r"岗位推荐.*?(\d+)"]),
         ("new_interviews", [r"面试\s*(\d+)", r"一面\s*(\d+)"]),
         ("referral_to_interview_rate", [r"推面比.*?(\d+(?:\.\d+)?)\s*%", r"推荐到面试.*?(\d+(?:\.\d+)?)\s*%"]),
         ("interview_to_offer_rate", [r"一面到\s*Offer.*?(\d+(?:\.\d+)?)\s*%", r"面试到\s*Offer.*?(\d+(?:\.\d+)?)\s*%"]),
@@ -394,7 +396,7 @@ def evidence_for_task(task: Dict[str, object], context: Dict[str, object]) -> pd
 
 
 def _actual_value(metric_key: str, task: Dict[str, object], context: Dict[str, object]) -> Tuple[float, List[dict], str]:
-    if metric_key in {"new_projects", "new_referrals", "new_interviews", "avg_referrals_per_project", "referral_to_interview_rate", "interview_to_offer_rate"}:
+    if metric_key in {"new_case_bd", "new_projects", "new_referrals", "new_interviews", "avg_referrals_per_project", "referral_to_interview_rate", "interview_to_offer_rate"}:
         return _process_metric(metric_key, task, context)
     if metric_key in {"new_offers", "offer_unpaid_amount"}:
         return _offer_metric(metric_key, task, context)
@@ -408,6 +410,8 @@ def _actual_value(metric_key: str, task: Dict[str, object], context: Dict[str, o
 
 
 def _process_metric(metric_key: str, task: Dict[str, object], context: Dict[str, object]) -> Tuple[float, List[dict], str]:
+    if metric_key == "new_case_bd":
+        return _case_bd_metric(task, context)
     df = context.get("active_process_df", pd.DataFrame())
     if df is None or df.empty:
         return 0.0, [], "active_process_df"
@@ -436,6 +440,34 @@ def _process_metric(metric_key: str, task: Dict[str, object], context: Dict[str,
     if metric_key == "interview_to_offer_rate":
         return _safe_rate(len(offers), len(interviews)), _process_evidence(offers), "active_process_df interview/offer"
     return 0.0, [], "active_process_df"
+
+
+def _case_bd_metric(task: Dict[str, object], context: Dict[str, object]) -> Tuple[float, List[dict], str]:
+    project_additions = context.get("project_additions", {})
+    detail = project_additions.get("detail", pd.DataFrame()) if isinstance(project_additions, dict) else pd.DataFrame()
+    if detail is None or detail.empty:
+        return 0.0, [], "project_additions.detail"
+    work = _filter_owner(detail.copy(), task)
+    start, end = _period(task)
+    work = _filter_date(work, "added_date", start, end)
+    if "joborder_id" not in work.columns:
+        return 0.0, [], "project_additions.detail.joborder_id"
+    rows = work.drop_duplicates("joborder_id", keep="first").copy()
+    evidence = []
+    for _, row in rows.iterrows():
+        evidence.append(
+            {
+                "joborder_id": row.get("joborder_id"),
+                "client_name": row.get("client_name"),
+                "position_name": row.get("position_name"),
+                "consultant": row.get("consultant"),
+                "team": row.get("team"),
+                "added_date": row.get("added_date"),
+                "job_status": row.get("job_status"),
+                "offer_count": row.get("offer_count"),
+            }
+        )
+    return float(rows["joborder_id"].nunique()), evidence, "project_additions.detail.added_date"
 
 
 def _offer_metric(metric_key: str, task: Dict[str, object], context: Dict[str, object]) -> Tuple[float, List[dict], str]:
@@ -554,7 +586,7 @@ def _infer_period(text: str, config: Dict[str, object]) -> Tuple[str, str]:
 
 
 def _infer_theme(metric_key: str) -> str:
-    if metric_key in {"new_bd_clients", "new_projects", "new_referrals", "new_interviews", "avg_referrals_per_project", "referral_to_interview_rate", "interview_to_offer_rate", "new_offers"}:
+    if metric_key in {"new_bd_clients", "new_case_bd", "new_projects", "new_referrals", "new_interviews", "avg_referrals_per_project", "referral_to_interview_rate", "interview_to_offer_rate", "new_offers"}:
         return "顾问产能"
     if metric_key in {"collection_amount", "offer_unpaid_amount"}:
         return "现金回款"

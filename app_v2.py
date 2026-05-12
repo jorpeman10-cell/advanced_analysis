@@ -67,8 +67,9 @@ def load_execution_data(start_date: str, end_date: str, forecast_days: int, cach
     collection_df = service.load_collection_data(start_date, end_date)
     consultants_df = service.load_consultants()
     offer_outcomes = service.load_offer_outcome_metrics(start_date, end_date)
+    project_additions = service.load_project_additions(start_date, end_date)
     db.close()
-    return process_df, forecast_df, collection_df, consultants_df, offer_outcomes
+    return process_df, forecast_df, collection_df, consultants_df, offer_outcomes, project_additions
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -207,7 +208,7 @@ def build_context(config: dict, salary_df: pd.DataFrame) -> dict:
 
 
 def build_execution_context(config: dict) -> dict:
-    process_df, forecast_df, collection_df, consultants_df, offer_outcomes = load_execution_data(
+    process_df, forecast_df, collection_df, consultants_df, offer_outcomes, project_additions = load_execution_data(
         config["start_date"],
         config["end_date"],
         config["forecast_days"],
@@ -222,6 +223,7 @@ def build_execution_context(config: dict) -> dict:
         "collection_df": collection_df,
         "consultants_df": consultants_df,
         "offer_outcomes": offer_outcomes,
+        "project_additions": project_additions,
         "pipeline": pipeline,
     }
 

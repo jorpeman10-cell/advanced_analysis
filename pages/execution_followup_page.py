@@ -136,12 +136,14 @@ def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> Non
         st.info("可以连续对话补充：对象、周期、指标口径、目标值。Agent 只在信息足够时生成待确认任务。")
         return
 
+    _render_metric_reference()
     st.markdown("##### 待确认任务指标")
     edited = st.data_editor(
         _display_tasks(pd.DataFrame(draft_tasks)),
         use_container_width=True,
         hide_index=True,
         num_rows="fixed",
+        column_config=_task_editor_column_config(),
         key="execution_agent_draft_editor",
     )
     if st.button("确认保存任务指标", type="primary", use_container_width=True):
@@ -284,6 +286,39 @@ def _display_tasks(df: pd.DataFrame) -> pd.DataFrame:
     return work[[c for c in cols if c in work.columns]]
 
 
+def _task_editor_column_config() -> Dict[str, object]:
+    return {
+        "metric": st.column_config.SelectboxColumn(
+            "指标",
+            options=_metric_label_options(),
+            required=True,
+            help="选择系统可核查的指标口径，避免 Agent 误解业务表达。",
+        ),
+        "operator": st.column_config.SelectboxColumn("判断", options=[">=", "<=", "="], required=True),
+        "owner_type": st.column_config.SelectboxColumn("对象类型", options=["consultant", "team", "company"], required=True),
+        "target_value": st.column_config.NumberColumn("目标值", step=1.0),
+    }
+
+
+def _render_metric_reference() -> None:
+    with st.expander("可核查指标口径", expanded=False):
+        rows = [
+            {"指标": "新增Case BD数", "系统口径": "joborder 新增数，按 addedBy 归属顾问；用于跟进新开 Case/岗位 BD。"},
+            {"指标": "新增岗位/项目数", "系统口径": "有推荐动作的去重 joborder 数；用于跟进开始推进的项目。"},
+            {"指标": "新增推荐数", "系统口径": "本周期新增推荐记录数。"},
+            {"指标": "平均推荐量", "系统口径": "新增推荐数 / 有推荐动作的去重岗位数。"},
+            {"指标": "新增面试数", "系统口径": "本周期新增一面记录数。"},
+            {"指标": "推面比", "系统口径": "新增面试数 / 新增推荐数。"},
+            {"指标": "新增Offer数", "系统口径": "本周期新增 Offer 数。"},
+            {"指标": "总未回款储备", "系统口径": "Invoice Added + Sent 未回款业绩，按顾问业绩分配拆分。"},
+        ]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def _metric_label_options() -> list[str]:
+    return [str(item.get("label")) for item in METRIC_DEFINITIONS.values()]
+
+
 def _apply_editor_row(task: Dict[str, object], row: pd.Series) -> None:
     for col in [
         "meeting_month",
@@ -305,6 +340,10 @@ def _apply_editor_row(task: Dict[str, object], row: pd.Series) -> None:
         metric_label = str(row.get("metric") or "")
         metric_key = _metric_key_from_label(metric_label) or task.get("metric_key")
         task["metric_key"] = metric_key
+        if metric_key in METRIC_DEFINITIONS:
+            definition = METRIC_DEFINITIONS[metric_key]
+            task["operator"] = task.get("operator") or definition.get("default_operator")
+            task["theme"] = task.get("theme") or _theme_for_metric(metric_key)
 
 
 def _consultant_options(context: Dict[str, object]) -> list[str]:
@@ -329,3 +368,23 @@ def _metric_key_from_label(label: str) -> str:
         if str(definition.get("label")) == str(label):
             return key
     return ""
+
+
+def _theme_for_metric(metric_key: str) -> str:
+    if metric_key in {
+        "new_bd_clients",
+        "new_case_bd",
+        "new_projects",
+        "new_referrals",
+        "avg_referrals_per_project",
+        "new_interviews",
+        "referral_to_interview_rate",
+        "interview_to_offer_rate",
+        "new_offers",
+    }:
+        return "顾问产能"
+    if metric_key in {"collection_amount", "offer_unpaid_amount"}:
+        return "现金回款"
+    if metric_key == "weighted_forecast":
+        return "Pipeline"
+    return "经营跟进"

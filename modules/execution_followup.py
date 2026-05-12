@@ -224,8 +224,9 @@ def run_task_definition_agent(
     )
     payload = {
         "model": model,
-        "temperature": float(llm_config.get("temperature", 0.4)),
+        "temperature": float(llm_config.get("temperature", 1.0)),
         "max_tokens": int(llm_config.get("max_tokens", 1800)),
+        "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_prompt},
             {
@@ -261,7 +262,21 @@ def run_task_definition_agent(
         raise RuntimeError(f"AI service request failed: {exc.reason}") from exc
 
     content = str(data["choices"][0]["message"]["content"]).strip()
-    result = _loads_agent_json(content)
+    try:
+        result = _loads_agent_json(content)
+    except Exception:
+        fallback_tasks = parse_management_tasks(f"{user_message}\n{content}", consultants, config)
+        return {
+            "status": "draft" if fallback_tasks else "clarify",
+            "assistant_message": (
+                "模型返回的结构化 JSON 不完整，我已保留这轮回复。"
+                "请继续补充或重试；如果下方出现草案，是系统根据文本做的兜底解析。\n\n"
+                f"{content[:1200]}"
+            ),
+            "tasks": fallback_tasks,
+            "model": model,
+            "raw_content": content,
+        }
     tasks = []
     for item in result.get("tasks", []) if isinstance(result.get("tasks"), list) else []:
         task = _normalize_agent_task(item, user_message, meeting_month, period_start, period_end)
@@ -280,6 +295,7 @@ def _loads_agent_json(content: str) -> Dict[str, object]:
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
         text = re.sub(r"```$", "", text).strip()
+    text = _strip_invalid_json_controls(text)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -288,6 +304,10 @@ def _loads_agent_json(content: str) -> Dict[str, object]:
         if start >= 0 and end > start:
             return json.loads(text[start : end + 1])
         raise
+
+
+def _strip_invalid_json_controls(text: str) -> str:
+    return "".join(ch for ch in text if ch in "\t\n\r" or ord(ch) >= 32)
 
 
 def _normalize_agent_task(

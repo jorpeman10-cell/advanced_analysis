@@ -48,15 +48,26 @@ def render_execution_followup(context: Dict[str, object], config: Dict[str, obje
 def _render_parser(config: Dict[str, object], consultants: list[str]) -> None:
     st.markdown("#### 管理任务解析")
     st.caption("示例中的 Consultant 可替换为任意顾问姓名。")
+    sample_text = "Consultant 下个月改善：BD 2家客户，新增面试5个，推面比50%，新增Offer 1个"
+    if st.button("填入示例", use_container_width=True):
+        st.session_state["execution_parse_text"] = sample_text
     text = st.text_area(
         "输入月会行动项",
-        placeholder="例如：Consultant 下个月改善：BD 2家客户，新增面试5个，推面比50%，新增Offer 1个",
+        placeholder=f"例如：{sample_text}",
         height=110,
+        key="execution_parse_text",
     )
     parsed = []
     if st.button("解析任务", use_container_width=True):
-        parsed = parse_management_tasks(text, consultants, config)
-        st.session_state["parsed_execution_tasks"] = parsed
+        if not str(text or "").strip():
+            parsed = []
+            st.session_state["parsed_execution_tasks"] = []
+            st.warning("请先输入任务内容。灰色示例只是提示文案，不会自动作为输入。")
+        else:
+            parsed = parse_management_tasks(text, consultants, config)
+            st.session_state["parsed_execution_tasks"] = parsed
+            if not parsed:
+                st.warning("没有识别到可核查指标。请包含目标数字，例如：新增面试5个、推面比50%、新增Offer 1个。")
 
     parsed = st.session_state.get("parsed_execution_tasks", parsed)
     if not parsed:

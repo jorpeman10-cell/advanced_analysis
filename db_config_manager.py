@@ -88,6 +88,10 @@ def _default_config() -> dict:
         "ssh_port": 9998,
         "ssh_user": "root",
         "ssh_password": "",
+        "ssh_timeout": 45,
+        "ssh_banner_timeout": 60,
+        "ssh_auth_timeout": 45,
+        "ssh_retries": 2,
     }
 
 
@@ -113,6 +117,10 @@ def _load_streamlit_secrets_config() -> dict:
                     "ssh_port",
                     "ssh_user",
                     "ssh_password",
+                    "ssh_timeout",
+                    "ssh_banner_timeout",
+                    "ssh_auth_timeout",
+                    "ssh_retries",
                 ]
                 if key in secrets
             }
@@ -120,7 +128,7 @@ def _load_streamlit_secrets_config() -> dict:
         return {}
 
     config = {key: value for key, value in raw_config.items() if value not in (None, "")}
-    for key in ["port", "ssh_port"]:
+    for key in ["port", "ssh_port", "ssh_timeout", "ssh_banner_timeout", "ssh_auth_timeout", "ssh_retries"]:
         if key in config:
             try:
                 config[key] = int(config[key])
@@ -152,6 +160,11 @@ def config_diagnostics() -> dict:
         "host": config.get("host", ""),
         "database": config.get("database", ""),
         "ssh_host": config.get("ssh_host", ""),
+        "ssh_port": config.get("ssh_port", ""),
+        "ssh_timeout": config.get("ssh_timeout", ""),
+        "ssh_banner_timeout": config.get("ssh_banner_timeout", ""),
+        "ssh_auth_timeout": config.get("ssh_auth_timeout", ""),
+        "ssh_retries": config.get("ssh_retries", ""),
     }
 
 
@@ -170,4 +183,8 @@ def get_gllue_db_config():
         ssh_port=cfg.get('ssh_port', 9998),
         ssh_user=cfg.get('ssh_user', 'root'),
         ssh_password=cfg.get('ssh_password', ''),
+        ssh_timeout=cfg.get('ssh_timeout', 45),
+        ssh_banner_timeout=cfg.get('ssh_banner_timeout', 60),
+        ssh_auth_timeout=cfg.get('ssh_auth_timeout', 45),
+        ssh_retries=cfg.get('ssh_retries', 2),
     )

@@ -233,6 +233,20 @@ def build_execution_base_context() -> dict:
     return {"consultants_df": consultants_df}
 
 
+def render_data_connection_error(error: Exception) -> None:
+    st.error("数据库/SSH 连接失败，暂时无法加载系统数据。")
+    st.caption(str(error))
+    with st.expander("连接排查建议", expanded=True):
+        st.markdown(
+            """
+1. 确认服务器 SSH 端口是否可达，当前配置通常是 `ssh_host` + `ssh_port`。
+2. 如果报 `Error reading SSH protocol banner`，通常表示端口不可达、端口不是 SSH 服务，或服务器响应太慢。
+3. 在 Streamlit Secrets / 本地配置里检查 `ssh_host`、`ssh_port`、`ssh_user`、`ssh_password`。
+4. 如果服务器临时卡住，稍后刷新数据或重启服务器 SSH 服务。
+"""
+        )
+
+
 def render_sidebar() -> tuple[dict, pd.DataFrame]:
     st.sidebar.title("Three-Speed v2")
     st.sidebar.caption("数据口径：过程转化 + 顾问成本 + 现金流压力")
@@ -303,7 +317,11 @@ def main() -> None:
     page = st.radio("页面", page_options, horizontal=True, label_visibility="collapsed")
 
     if page == "执行跟进":
-        context = build_execution_base_context()
+        try:
+            context = build_execution_base_context()
+        except Exception as exc:
+            render_data_connection_error(exc)
+            return
         render_execution_followup(
             context,
             config,
@@ -312,7 +330,11 @@ def main() -> None:
         return
 
     with st.spinner("加载并计算 v2 指标..."):
-        context = build_context(config, salary_df)
+        try:
+            context = build_context(config, salary_df)
+        except Exception as exc:
+            render_data_connection_error(exc)
+            return
 
     if page == "全景仪表盘":
         render_dashboard(context)

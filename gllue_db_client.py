@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Optional, Dict, List
 from dataclasses import dataclass, field
 from io import StringIO
+import time
 
 
 @dataclass
@@ -29,6 +30,10 @@ class GllueDBConfig:
     ssh_port: int = 22
     ssh_user: str = "root"
     ssh_password: str = ""
+    ssh_timeout: int = 45
+    ssh_banner_timeout: int = 60
+    ssh_auth_timeout: int = 45
+    ssh_retries: int = 2
 
 
 class GllueDBClient:
@@ -66,16 +71,43 @@ class GllueDBClient:
         """获取或创建 SSH 连接（复用连接）"""
         if self._ssh_client is None or not self._ssh_connected:
             import paramiko
-            self._ssh_client = paramiko.SSHClient()
-            self._ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            self._ssh_client.connect(
-                self.config.ssh_host,
-                port=self.config.ssh_port,
-                username=self.config.ssh_user,
-                password=self.config.ssh_password,
-                timeout=30
-            )
-            self._ssh_connected = True
+            last_error = None
+            retries = max(int(self.config.ssh_retries or 1), 1)
+            for attempt in range(retries):
+                try:
+                    self._ssh_client = paramiko.SSHClient()
+                    self._ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    self._ssh_client.connect(
+                        self.config.ssh_host,
+                        port=int(self.config.ssh_port),
+                        username=self.config.ssh_user,
+                        password=self.config.ssh_password,
+                        timeout=int(self.config.ssh_timeout or 45),
+                        banner_timeout=int(self.config.ssh_banner_timeout or 60),
+                        auth_timeout=int(self.config.ssh_auth_timeout or 45),
+                        look_for_keys=False,
+                        allow_agent=False,
+                    )
+                    self._ssh_connected = True
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    self._ssh_connected = False
+                    if self._ssh_client:
+                        try:
+                            self._ssh_client.close()
+                        except Exception:
+                            pass
+                    self._ssh_client = None
+                    if attempt + 1 < retries:
+                        time.sleep(2)
+            if not self._ssh_connected:
+                raise RuntimeError(
+                    "SSH tunnel connection failed. "
+                    f"host={self.config.ssh_host}, port={self.config.ssh_port}. "
+                    "Please verify the SSH host/port is reachable and that the port is an SSH service. "
+                    f"Original error: {last_error}"
+                ) from last_error
         return self._ssh_client
     
     def query(self, sql: str, params: Optional[Dict] = None) -> pd.DataFrame:

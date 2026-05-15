@@ -40,16 +40,14 @@ def render_execution_followup(
 
     mode = st.radio(
         "执行跟进模式",
-        ["指标录入", "完成核对", "任务库"],
+        ["指标录入", "任务库"],
         horizontal=True,
         label_visibility="collapsed",
     )
     if mode == "指标录入":
         _render_task_definition(config, consultants)
-    elif mode == "完成核对":
-        _render_review(tasks_df, context, config, review_context_loader)
     else:
-        _render_task_library(tasks_df)
+        _render_task_library(tasks_df, context, config, review_context_loader)
 
 
 def _render_task_definition(config: Dict[str, object], consultants: list[str]) -> None:
@@ -465,7 +463,12 @@ def _render_review(
         st.dataframe(evidence, use_container_width=True, hide_index=True)
 
 
-def _render_task_library(tasks_df: pd.DataFrame) -> None:
+def _render_task_library(
+    tasks_df: pd.DataFrame,
+    base_context: Dict[str, object],
+    config: Dict[str, object],
+    review_context_loader: Callable[[], Dict[str, object]] | None = None,
+) -> None:
     st.markdown("#### 任务库")
     if tasks_df.empty:
         st.info("任务库为空。")
@@ -475,6 +478,8 @@ def _render_task_library(tasks_df: pd.DataFrame) -> None:
             st.info("当前筛选条件下没有任务。")
         else:
             _render_grouped_task_list(filtered)
+
+        _render_library_review_controls(filtered, base_context, config, review_context_loader)
 
         with st.expander("原始明细", expanded=False):
             st.dataframe(_display_tasks(filtered), use_container_width=True, hide_index=True)
@@ -533,6 +538,123 @@ def _render_goal_followup(goals_df: pd.DataFrame) -> None:
     c1.metric("管理目标数", len(display))
     c2.metric("本周需跟进", due_count)
     c3.metric("高优先级", int(display["priority"].astype(str).eq("High").sum()) if "priority" in display.columns else 0)
+
+
+def _render_library_review_controls(
+    filtered: pd.DataFrame,
+    base_context: Dict[str, object],
+    config: Dict[str, object],
+    review_context_loader: Callable[[], Dict[str, object]] | None = None,
+) -> None:
+    st.markdown("#### 完成核对")
+    if filtered is None or filtered.empty:
+        st.info("请先在任务库筛选出需要核对的任务。")
+        return
+
+    default_start, default_end = _default_assessment_period(config)
+    c1, c2, c3 = st.columns([1, 1, 1.2])
+    with c1:
+        review_start = st.date_input("考核开始日期", value=default_start, key="library_review_start")
+    with c2:
+        review_end = st.date_input("考核结束日期", value=default_end, key="library_review_end")
+    with c3:
+        override_period = st.checkbox(
+            "用筛选周期核查",
+            value=True,
+            key="library_review_override_period",
+            help="开启后，量化指标按上方日期重新计算，不受任务保存时的周期影响。",
+        )
+
+    consultant_tasks = filtered[filtered["owner_type"].astype(str).eq("consultant")].copy()
+    consultant_options = sorted([str(x) for x in consultant_tasks["owner_name"].dropna().unique() if str(x)])
+    selected_consultants = st.multiselect(
+        "选择需要核对的顾问",
+        consultant_options,
+        default=consultant_options[:1] if consultant_options else [],
+        key="library_review_consultants",
+    )
+    include_non_consultant = st.checkbox("同时核对团队/公司任务", value=False, key="library_review_include_non_consultant")
+
+    if st.button("核对所选顾问任务", type="primary", disabled=not selected_consultants and not include_non_consultant, use_container_width=True):
+        active = filtered[filtered["status"].astype(str).isin(["active", "跟进中", "计划中", ""])].copy()
+        active = _filter_tasks_by_review_period(active, review_start, review_end)
+        if selected_consultants:
+            consultant_mask = active["owner_type"].astype(str).eq("consultant") & active["owner_name"].astype(str).isin(selected_consultants)
+        else:
+            consultant_mask = pd.Series(False, index=active.index)
+        non_consultant_mask = ~active["owner_type"].astype(str).eq("consultant") if include_non_consultant else pd.Series(False, index=active.index)
+        active = active[consultant_mask | non_consultant_mask].copy()
+        if active.empty:
+            st.warning("所选顾问/周期下没有可核对任务。")
+            return
+        if override_period:
+            metric_mask = ~active["metric_key"].astype(str).eq("management_goal")
+            active.loc[metric_mask, "period_start"] = pd.to_datetime(review_start).date().isoformat()
+            active.loc[metric_mask, "period_end"] = pd.to_datetime(review_end).date().isoformat()
+
+        if review_context_loader is not None:
+            with st.spinner("加载核对数据并逐个顾问计算..."):
+                context = review_context_loader()
+        else:
+            context = base_context
+        _render_review_by_owner(active, context)
+
+
+def _render_review_by_owner(active: pd.DataFrame, context: Dict[str, object]) -> None:
+    goals = active[active["metric_key"].astype(str).eq("management_goal")].copy()
+    metric_tasks = active[~active["metric_key"].astype(str).eq("management_goal")].copy()
+    reviewed = review_tasks(metric_tasks, context) if not metric_tasks.empty else pd.DataFrame()
+
+    owners = sorted([str(x) for x in active["owner_name"].dropna().unique() if str(x)])
+    for owner in owners:
+        owner_goals = goals[goals["owner_name"].astype(str).eq(owner)].copy()
+        owner_reviewed = reviewed[reviewed["owner_name"].astype(str).eq(owner)].copy() if not reviewed.empty else pd.DataFrame()
+        completed = int(owner_reviewed["is_completed"].fillna(False).sum()) if not owner_reviewed.empty else 0
+        total = len(owner_reviewed)
+        title = f"{owner} | 管理目标 {len(owner_goals)} / 量化指标 {total} / 完成 {completed}"
+        with st.expander(title, expanded=True):
+            if not owner_goals.empty:
+                _render_goal_followup(owner_goals)
+            if owner_reviewed.empty:
+                st.info("该对象没有可量化核对任务。")
+                continue
+            c1, c2, c3 = st.columns(3)
+            c1.metric("量化指标", total)
+            c2.metric("完成数", completed)
+            c3.metric("完成率", f"{completed / total:.0%}" if total else "-")
+            summary_cols = [
+                "theme",
+                "task",
+                "metric_label",
+                "target_display",
+                "actual_display",
+                "completion_rate",
+                "review_status",
+                "gap_display",
+                "evidence_count",
+                "data_source",
+            ]
+            display = owner_reviewed[[c for c in summary_cols if c in owner_reviewed.columns]].copy()
+            if "completion_rate" in display.columns:
+                display["completion_rate"] = display["completion_rate"].apply(lambda x: f"{float(x):.0%}")
+            st.dataframe(display, use_container_width=True, hide_index=True)
+            task_options = owner_reviewed["id"].astype(str).tolist()
+            labels = {
+                str(row["id"]): f"{row.get('metric_label')} | {row.get('review_status')}"
+                for _, row in owner_reviewed.iterrows()
+            }
+            selected = st.selectbox(
+                "查看该顾问任务证据",
+                task_options,
+                format_func=lambda x: labels.get(x, x),
+                key=f"evidence_select_{owner}",
+            )
+            row = owner_reviewed[owner_reviewed["id"].astype(str).eq(str(selected))].iloc[0].to_dict()
+            evidence = evidence_for_task(row, context)
+            if evidence.empty:
+                st.warning("该任务没有可展示的证据明细。")
+            else:
+                st.dataframe(evidence, use_container_width=True, hide_index=True)
 
 
 def _task_library_filters(tasks_df: pd.DataFrame) -> pd.DataFrame:

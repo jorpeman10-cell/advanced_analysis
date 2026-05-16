@@ -480,7 +480,7 @@ def _render_task_library(
     config: Dict[str, object],
     review_context_loader: Callable[[], Dict[str, object]] | None = None,
 ) -> None:
-    st.markdown("#### 任务库")
+    st.markdown("#### OKR 任务库")
     if tasks_df.empty:
         st.info("任务库为空。")
     else:
@@ -489,6 +489,7 @@ def _render_task_library(
             st.info("当前筛选条件下没有任务。")
         else:
             _render_grouped_task_list(filtered)
+            _render_weekly_followup_panel(filtered)
 
         _render_library_review_controls(filtered, base_context, config, review_context_loader)
 
@@ -654,6 +655,21 @@ def _render_review_by_owner(active: pd.DataFrame, context: Dict[str, object]) ->
             c1.metric("量化指标", total)
             c2.metric("完成数", completed)
             c3.metric("完成率", f"{completed / total:.0%}" if total else "-")
+            objective_summary = (
+                owner_reviewed.groupby("theme", dropna=False)
+                .agg(
+                    kr_count=("id", "count"),
+                    completed=("is_completed", lambda s: int(pd.Series(s).fillna(False).sum())),
+                    avg_completion=("completion_rate", "mean"),
+                )
+                .reset_index()
+                .rename(columns={"theme": "Objective", "kr_count": "KR数", "completed": "完成KR"})
+            )
+            if not objective_summary.empty:
+                objective_summary["Objective"] = objective_summary["Objective"].fillna("未归类")
+                objective_summary["平均完成率"] = objective_summary["avg_completion"].apply(lambda x: f"{float(x):.0%}")
+                st.markdown("**Objective 完成概览**")
+                st.dataframe(objective_summary[["Objective", "KR数", "完成KR", "平均完成率"]], use_container_width=True, hide_index=True)
             summary_cols = [
                 "theme",
                 "task",
@@ -722,6 +738,7 @@ def _task_library_filters(tasks_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _render_grouped_task_list(tasks_df: pd.DataFrame) -> None:
+    st.markdown("#### Objective / KR 清单")
     summary = (
         tasks_df.assign(
             is_goal=tasks_df["metric_key"].astype(str).eq("management_goal"),
@@ -739,8 +756,8 @@ def _render_grouped_task_list(tasks_df: pd.DataFrame) -> None:
     )
     c1, c2, c3 = st.columns(3)
     c1.metric("对象数", len(summary))
-    c2.metric("管理目标", int(summary["goal_count"].sum()))
-    c3.metric("量化指标", int(summary["metric_count"].sum()))
+    c2.metric("Objective", int(summary["goal_count"].sum()))
+    c3.metric("KR 指标", int(summary["metric_count"].sum()))
 
     for _, row in summary.iterrows():
         owner_type = str(row.get("owner_type") or "")
@@ -751,42 +768,144 @@ def _render_grouped_task_list(tasks_df: pd.DataFrame) -> None:
         ].copy()
         title = (
             f"{owner_name or '(未指定对象)'} | {owner_type} | "
-            f"{int(row['goal_count'])} 个管理目标 / {int(row['metric_count'])} 个量化指标"
+            f"{int(row['goal_count'])} 个 Objective / {int(row['metric_count'])} 个 KR"
         )
         with st.expander(title, expanded=False):
             goals = owner_tasks[owner_tasks["metric_key"].astype(str).eq("management_goal")].copy()
             metrics = owner_tasks[~owner_tasks["metric_key"].astype(str).eq("management_goal")].copy()
-            if not goals.empty:
-                st.markdown("**管理目标**")
-                goal_cols = [
-                    "meeting_month",
-                    "goal_type",
-                    "target_customer",
-                    "target_domain",
-                    "target_position",
-                    "goal_direction",
-                    "weekly_check_day",
-                    "next_check_date",
-                    "priority",
-                    "status",
-                ]
-                st.dataframe(goals[[c for c in goal_cols if c in goals.columns]], use_container_width=True, hide_index=True)
-            if not metrics.empty:
-                st.markdown("**量化指标**")
-                metric_display = _display_tasks(metrics)
-                metric_cols = [
-                    "meeting_month",
-                    "theme",
-                    "task",
-                    "metric",
-                    "operator",
-                    "target_value",
-                    "period_start",
-                    "period_end",
-                    "priority",
-                    "status",
-                ]
-                st.dataframe(metric_display[[c for c in metric_cols if c in metric_display.columns]], use_container_width=True, hide_index=True)
+            objectives = _objective_sections(goals, metrics)
+            for idx, objective in enumerate(objectives, start=1):
+                st.markdown(f"**O{idx}. {objective['title']}**")
+                if objective.get("goal_rows") is not None and not objective["goal_rows"].empty:
+                    goal_cols = [
+                        "goal_type",
+                        "target_customer",
+                        "target_domain",
+                        "target_position",
+                        "goal_direction",
+                        "weekly_check_day",
+                        "next_check_date",
+                        "priority",
+                        "status",
+                        "progress_note",
+                    ]
+                    st.dataframe(
+                        objective["goal_rows"][[c for c in goal_cols if c in objective["goal_rows"].columns]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                kr_rows = objective.get("metric_rows", pd.DataFrame())
+                if kr_rows is not None and not kr_rows.empty:
+                    kr_display = _display_tasks(kr_rows)
+                    kr_cols = [
+                        "meeting_month",
+                        "task",
+                        "metric",
+                        "operator",
+                        "target_value",
+                        "period_start",
+                        "period_end",
+                        "priority",
+                        "status",
+                    ]
+                    st.dataframe(kr_display[[c for c in kr_cols if c in kr_display.columns]], use_container_width=True, hide_index=True)
+                else:
+                    st.caption("该 Objective 下还没有绑定 KR 指标。")
+
+
+def _objective_sections(goals: pd.DataFrame, metrics: pd.DataFrame) -> list[dict]:
+    sections: list[dict] = []
+    used_metric_ids: set[str] = set()
+    if goals is not None and not goals.empty:
+        for _, goal in goals.iterrows():
+            goal_theme = str(goal.get("goal_type") or goal.get("theme") or "管理目标")
+            title = _goal_title(goal)
+            related = pd.DataFrame()
+            if metrics is not None and not metrics.empty:
+                related = metrics[metrics["theme"].astype(str).eq(goal_theme)].copy()
+                if related.empty:
+                    related = metrics[metrics["theme"].astype(str).eq(str(goal.get("theme") or ""))].copy()
+                used_metric_ids.update(related.get("id", pd.Series(dtype=object)).astype(str).tolist())
+            sections.append({"title": title, "goal_rows": pd.DataFrame([goal]), "metric_rows": related})
+    if metrics is not None and not metrics.empty:
+        remaining = metrics[~metrics.get("id", pd.Series(dtype=object)).astype(str).isin(used_metric_ids)].copy()
+        for theme, rows in remaining.groupby("theme", dropna=False):
+            sections.append({"title": str(theme or "未归类 KR"), "goal_rows": pd.DataFrame(), "metric_rows": rows.copy()})
+    if not sections:
+        sections.append({"title": "未设置 Objective", "goal_rows": pd.DataFrame(), "metric_rows": pd.DataFrame()})
+    return sections
+
+
+def _goal_title(goal: pd.Series) -> str:
+    parts = [
+        str(goal.get("goal_type") or "").strip(),
+        str(goal.get("target_customer") or "").strip(),
+        str(goal.get("target_domain") or "").strip(),
+        str(goal.get("target_position") or "").strip(),
+    ]
+    title = " / ".join([p for p in parts if p])
+    if title:
+        return title
+    direction = str(goal.get("goal_direction") or goal.get("task") or "管理目标").strip()
+    return direction[:80]
+
+
+def _render_weekly_followup_panel(tasks_df: pd.DataFrame) -> None:
+    goals = tasks_df[tasks_df["metric_key"].astype(str).eq("management_goal")].copy() if tasks_df is not None and not tasks_df.empty else pd.DataFrame()
+    st.markdown("#### 周跟进")
+    if goals.empty:
+        st.info("当前筛选范围内没有 Objective 可做周跟进。")
+        return
+    today = pd.Timestamp.today().normalize()
+    next_dates = pd.to_datetime(goals.get("next_check_date"), errors="coerce").dt.normalize()
+    goals["提醒状态"] = ["本周/已到期" if pd.notna(d) and d <= today else "未到提醒" for d in next_dates]
+    due_count = int((next_dates <= today).fillna(False).sum())
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Objective", len(goals))
+    c2.metric("本周需跟进", due_count)
+    c3.metric("High 优先级", int(goals["priority"].astype(str).eq("High").sum()) if "priority" in goals.columns else 0)
+
+    labels = {str(row["id"]): f"{row.get('owner_name')} | {_goal_title(row)} | {row.get('提醒状态')}" for _, row in goals.iterrows()}
+    selected_goal_id = st.selectbox(
+        "选择 Objective 更新周进展",
+        list(labels.keys()),
+        format_func=lambda value: labels.get(value, value),
+        key="weekly_followup_goal_select",
+    )
+    selected = goals[goals["id"].astype(str).eq(str(selected_goal_id))]
+    if selected.empty:
+        return
+    row = selected.iloc[0]
+    c4, c5 = st.columns([1, 2])
+    with c4:
+        status_options = ["active", "跟进中", "已完成", "延期", "取消"]
+        current_status = str(row.get("status") or "active")
+        status_index = status_options.index(current_status) if current_status in status_options else 0
+        new_status = st.selectbox(
+            "状态",
+            status_options,
+            index=status_index,
+            key="weekly_followup_status",
+        )
+    with c5:
+        new_note = st.text_area(
+            "本周进展备注",
+            value=str(row.get("progress_note") or ""),
+            height=80,
+            key="weekly_followup_note",
+        )
+    if st.button("保存周跟进", use_container_width=True):
+        all_tasks = load_tasks()
+        mask = all_tasks["id"].astype(str).eq(str(selected_goal_id))
+        if not mask.any():
+            st.error("没有找到该 Objective，可能已被删除。")
+            return
+        all_tasks.loc[mask, "status"] = new_status
+        all_tasks.loc[mask, "progress_note"] = new_note
+        all_tasks.loc[mask, "next_check_date"] = _next_weekly_check_date(str(row.get("weekly_check_day") or "周一"))
+        save_tasks(all_tasks)
+        st.success("已保存周跟进。")
+        st.rerun()
 
 
 def _execution_agent_llm_config() -> Dict[str, object]:
@@ -866,7 +985,7 @@ def _render_metric_reference() -> None:
             {"指标": "新增面试数", "系统口径": "本周期新增一面记录数。"},
             {"指标": "推面比", "系统口径": "新增面试数 / 新增推荐数。"},
             {"指标": "新增Offer数", "系统口径": "本周期新增 Offer 数。"},
-            {"指标": "总未回款储备", "系统口径": "Invoice Added + Sent 未回款业绩，按顾问业绩分配拆分。"},
+            {"指标": "Offer储备金额", "系统口径": "Invoice Added + Sent 未回款业绩，按顾问业绩分配拆分。"},
         ]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 

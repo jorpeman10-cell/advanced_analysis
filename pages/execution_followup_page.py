@@ -309,6 +309,9 @@ def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> Non
             st.markdown(message.get("content", ""))
 
     sample_text = "Consultant 下个月目标：提升顾问产能。KR：BD 2家客户，新增面试5个，推面比50%，新增Offer 1个"
+    pending_text = st.session_state.pop("execution_agent_user_text_pending", None)
+    if pending_text is not None:
+        st.session_state["execution_agent_user_text"] = pending_text
     user_text = st.text_area(
         "和 OKR 任务拆解助手说明本次月会行动项",
         placeholder=f"例如：{sample_text}",
@@ -320,7 +323,7 @@ def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> Non
         send_clicked = st.button("发送给 OKR 助手", type="primary", use_container_width=True)
     with col2:
         if st.button("填入示例", use_container_width=True):
-            st.session_state["execution_agent_user_text"] = sample_text
+            st.session_state["execution_agent_user_text_pending"] = sample_text
             st.rerun()
     with col3:
         if st.button("清空对话", use_container_width=True):

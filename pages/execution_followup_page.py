@@ -58,14 +58,14 @@ def render_execution_followup(
 
 
 def _render_task_definition(config: Dict[str, object], consultants: list[str]) -> None:
-    st.markdown("#### 管理任务指标录入")
-    st.caption("优先用指标下拉框定义任务，避免模型误解业务表达。Agent 只作为辅助整理，不影响你手动选择指标口径。")
+    st.markdown("#### OKR 与管理任务指标录入")
+    st.caption("先明确 Objective，再拆成可核查 KR/行动指标。下拉指标保证口径准确，OKR 助手用于澄清和整理。")
 
     _render_management_goal_builder(config, consultants)
     st.divider()
     _render_manual_task_builder(config, consultants)
 
-    with st.expander("任务 Agent 辅助整理", expanded=False):
+    with st.expander("OKR 任务拆解助手", expanded=False):
         _render_task_agent(config, consultants)
 
 
@@ -286,8 +286,8 @@ def _render_manual_task_builder(config: Dict[str, object], consultants: list[str
 
 
 def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> None:
-    st.markdown("##### Agent 对话")
-    st.caption("用于把自然语言整理成草案；保存前仍需在下拉指标表格中确认口径。")
+    st.markdown("##### OKR 任务拆解助手")
+    st.caption("按 OKR 方法把月会行动项澄清成 Objective 和可核查 KR；保存前仍需确认指标口径。")
 
     llm_config = _execution_agent_llm_config()
     with st.expander("模型连接", expanded=False):
@@ -308,16 +308,16 @@ def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> Non
         with st.chat_message(role):
             st.markdown(message.get("content", ""))
 
-    sample_text = "Consultant 下个月改善：BD 2家客户，新增面试5个，推面比50%，新增Offer 1个"
+    sample_text = "Consultant 下个月目标：提升顾问产能。KR：BD 2家客户，新增面试5个，推面比50%，新增Offer 1个"
     user_text = st.text_area(
-        "和任务 Agent 说明本次月会行动项",
+        "和 OKR 任务拆解助手说明本次月会行动项",
         placeholder=f"例如：{sample_text}",
         height=110,
         key="execution_agent_user_text",
     )
     col1, col2, col3 = st.columns([1.2, 1, 1])
     with col1:
-        send_clicked = st.button("发送给任务 Agent", type="primary", use_container_width=True)
+        send_clicked = st.button("发送给 OKR 助手", type="primary", use_container_width=True)
     with col2:
         if st.button("填入示例", use_container_width=True):
             st.session_state["execution_agent_user_text"] = sample_text
@@ -332,11 +332,11 @@ def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> Non
         if not str(user_text or "").strip():
             st.error("请先输入你希望跟进的管理动作。灰色示例只是提示文案，不会自动作为输入。")
         elif not llm_config.get("api_key"):
-            st.error("任务定义 Agent 需要模型 Key。当前没有读取到 MOONSHOT_API_KEY。")
+            st.error("OKR 任务拆解助手需要模型 Key。当前没有读取到 MOONSHOT_API_KEY。")
         else:
             st.session_state["execution_task_agent_messages"].append({"role": "user", "content": user_text})
             try:
-                with st.spinner("任务 Agent 正在澄清并生成指标草案..."):
+                with st.spinner("OKR 任务拆解助手正在澄清 Objective 并生成 KR 指标草案..."):
                     result = run_task_definition_agent(
                         user_message=user_text,
                         chat_history=st.session_state["execution_task_agent_messages"],
@@ -344,28 +344,28 @@ def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> Non
                         config=config,
                         llm_config=llm_config,
                     )
-                assistant_message = result.get("assistant_message") or "我已经整理出任务草案，请在下方确认。"
+                assistant_message = result.get("assistant_message") or "我已经整理出 OKR 任务草案，请在下方确认。"
                 tasks = result.get("tasks") or []
                 if tasks:
                     st.session_state["execution_agent_draft_tasks"] = tasks
-                    assistant_message += f"\n\n已生成 {len(tasks)} 条可核查指标草案。"
+                    assistant_message += f"\n\n已生成 {len(tasks)} 条可核查 KR 指标草案。"
                 st.session_state["execution_task_agent_messages"].append(
                     {"role": "assistant", "content": assistant_message}
                 )
                 st.rerun()
             except Exception as exc:
                 st.session_state["execution_task_agent_messages"].append(
-                    {"role": "assistant", "content": f"任务 Agent 调用失败：{exc}"}
+                    {"role": "assistant", "content": f"OKR 任务拆解助手调用失败：{exc}"}
                 )
-                st.error(f"任务 Agent 调用失败：{exc}")
+                st.error(f"OKR 任务拆解助手调用失败：{exc}")
 
     draft_tasks = st.session_state.get("execution_agent_draft_tasks", [])
     if not draft_tasks:
-        st.info("可以连续对话补充：对象、周期、指标口径、目标值。Agent 只在信息足够时生成待确认任务。")
+        st.info("可以连续对话补充：Objective、对象、周期、指标口径、基线和目标值。OKR 助手只在信息足够时生成待确认 KR。")
         return
 
     _render_metric_reference()
-    st.markdown("##### 待确认任务指标")
+    st.markdown("##### 待确认 OKR / KR 指标")
     edited = st.data_editor(
         _display_tasks(pd.DataFrame(draft_tasks)),
         use_container_width=True,

@@ -189,17 +189,17 @@ def run_task_definition_agent(
     config: Dict[str, object],
     llm_config: Dict[str, object],
 ) -> Dict[str, object]:
-    """Use an LLM to turn management intent into confirmable metric tasks.
+    """Use an LLM to turn management intent into confirmable OKR metric tasks.
 
-    This is intentionally a task-definition agent only. It should clarify and
-    structure the monthly follow-up plan, but it must not review completion or
-    claim that it has checked system results.
+    This is intentionally an OKR-definition assistant only. It should clarify
+    Objectives and Key Results, but it must not review completion or claim that
+    it has checked system results.
     """
     base_url = str(llm_config.get("base_url") or "").rstrip("/")
     model = str(llm_config.get("model") or "").strip()
     api_key = str(llm_config.get("api_key") or "").strip()
     if not base_url or not model or not api_key:
-        raise ValueError("Task Agent requires base_url, model and api_key")
+        raise ValueError("OKR task assistant requires base_url, model and api_key")
 
     metric_specs = [
         {
@@ -218,12 +218,22 @@ def run_task_definition_agent(
         for item in (chat_history or [])[-8:]
         if item.get("content")
     ]
+    okr_skill_prompt = (
+        "OKR Coach 方法论：Objective 是方向性目标，必须定性、清晰、有周期边界、团队可影响，"
+        "不要把数字写进 Objective；Key Result 是衡量目标是否达成的关键结果，必须 SMART：具体、可衡量、"
+        "有目标值或里程碑、有挑战但可达成、与 Objective 直接相关、有时限。"
+        "每个 Objective 建议对应2-5个 KR；KR 优先使用指标型，其次里程碑型，尽量避免纯二元任务。"
+        "检查 KR 是否只是任务动作：如果只是'拜访客户/整理名单'，应转成可核查的行为数量或结果数量。"
+        "信息不足时最多问3个澄清问题，优先补齐对象、周期、指标口径、基线/目标值。"
+    )
     system_prompt = (
-        "你是猎头公司月会执行跟进的任务定义 Agent。你的目标不是简单抽取字段，"
-        "而是通过对话帮助管理者把行动要求澄清成可追踪、可核查的指标任务。\n"
+        "你是猎头公司月会执行跟进的 OKR 任务拆解助手。你的目标不是简单抽取字段，"
+        "而是通过对话帮助管理者把月会行动要求澄清成 Objective + 可追踪、可核查的 Key Results。\n"
+        f"{okr_skill_prompt}\n"
         "你只能做任务定义，不要核查完成情况，不要声称读取了系统结果。\n"
         "如果信息不足，先提出1-3个具体澄清问题；如果信息足够，输出任务草案。\n"
         "任务草案必须使用给定 metric_key，不要自造指标。对象可以是 consultant/team/company。"
+        "JSON里的theme字段写Objective方向，例如'客户结构改善'；task字段写KR或行动指标，例如'BD新增客户数 >= 2'。"
         "金额单位用人民币元，百分比用0-1小数，例如50%写0.5。\n"
         "你必须只返回JSON，不要Markdown。JSON格式："
         "{\"status\":\"clarify|draft\",\"assistant_message\":\"...\","
@@ -359,7 +369,7 @@ def _normalize_agent_task(
         "period_end": str(item.get("period_end") or default_end),
         "priority": str(item.get("priority") or "Medium"),
         "status": "active",
-        "notes": str(item.get("notes") or "LLM任务定义Agent生成，需人工确认"),
+        "notes": str(item.get("notes") or "OKR任务拆解助手生成，需人工确认"),
         "source_text": source_text,
     }
 

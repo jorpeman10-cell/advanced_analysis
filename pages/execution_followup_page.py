@@ -52,12 +52,12 @@ def render_execution_followup(
         label_visibility="collapsed",
     )
     if mode == "指标录入":
-        _render_task_definition(config, consultants)
+        _render_task_definition(config, consultants, context)
     else:
         _render_task_library(tasks_df, context, config, review_context_loader)
 
 
-def _render_task_definition(config: Dict[str, object], consultants: list[str]) -> None:
+def _render_task_definition(config: Dict[str, object], consultants: list[str], context: Dict[str, object]) -> None:
     st.markdown("#### OKR 与管理任务指标录入")
     st.caption("先明确 Objective，再拆成可核查 KR/行动指标。下拉指标保证口径准确，OKR 助手用于澄清和整理。")
 
@@ -66,7 +66,7 @@ def _render_task_definition(config: Dict[str, object], consultants: list[str]) -
     _render_manual_task_builder(config, consultants)
 
     with st.expander("OKR 任务拆解助手", expanded=False):
-        _render_task_agent(config, consultants)
+        _render_task_agent(config, consultants, context)
 
 
 def _render_management_goal_builder(config: Dict[str, object], consultants: list[str]) -> None:
@@ -285,7 +285,7 @@ def _render_manual_task_builder(config: Dict[str, object], consultants: list[str
         st.rerun()
 
 
-def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> None:
+def _render_task_agent(config: Dict[str, object], consultants: list[str], context: Dict[str, object]) -> None:
     st.markdown("##### OKR 任务拆解助手")
     st.caption("按 OKR 方法把月会行动项澄清成 Objective 和可核查 KR；保存前仍需确认指标口径。")
 
@@ -346,6 +346,7 @@ def _render_task_agent(config: Dict[str, object], consultants: list[str]) -> Non
                         consultants=consultants,
                         config=config,
                         llm_config=llm_config,
+                        context=context,
                     )
                 assistant_message = result.get("assistant_message") or "我已经整理出 OKR 任务草案，请在下方确认。"
                 tasks = result.get("tasks") or []

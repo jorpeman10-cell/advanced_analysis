@@ -189,6 +189,7 @@ def run_task_definition_agent(
     consultants: Iterable[str],
     config: Dict[str, object],
     llm_config: Dict[str, object],
+    context: Dict[str, object] | None = None,
 ) -> Dict[str, object]:
     """Use an LLM to turn management intent into confirmable OKR metric tasks.
 
@@ -214,12 +215,13 @@ def run_task_definition_agent(
     consultant_list = [str(x) for x in consultants if str(x).strip()]
     period_start, period_end = _infer_period(user_message, config)
     meeting_month = str(config.get("end_date") or "")[:7]
+    planning_context = _okr_planning_context(user_message, consultants, config, context or {})
     compact_history = [
         {"role": item.get("role", "user"), "content": str(item.get("content", ""))[:1200]}
         for item in (chat_history or [])[-8:]
         if item.get("content")
     ]
-    preflight = _preflight_okr_clarification(user_message, consultants)
+    preflight = _preflight_okr_clarification(user_message, consultants, planning_context)
     if preflight:
         return {
             "status": "clarify",
@@ -240,8 +242,10 @@ def run_task_definition_agent(
         "而是通过对话帮助管理者把月会行动要求澄清成 Objective + 可追踪、可核查的 Key Results。\n"
         f"{okr_skill_prompt}\n"
         "你只能做任务定义，不要核查完成情况，不要声称读取了系统结果。\n"
+        "你可以参考 planning_context 中的顾问成本、过去180天推荐/面试/转化、Offer储备、Forecast和回款数据来建议目标值是否合理；"
+        "但不要把这些参考数据说成完成核对结果。\n"
         "如果信息不足，先提出1-3个具体澄清问题；如果信息足够，输出任务草案。\n"
-        "如果用户只给了对象、周期和指标名称，但没有给目标数值或目标状态，必须返回clarify，不要生成tasks。\n"
+        "如果用户只给了对象、周期和指标名称，但没有给目标数值或目标状态，可以结合planning_context给出建议目标，并请用户确认；不要直接生成tasks。\n"
         "任务草案必须使用给定 metric_key，不要自造指标。对象可以是 consultant/team/company。"
         "JSON里的theme字段写Objective方向，例如'客户结构改善'；task字段写KR或行动指标，例如'BD新增客户数 >= 2'。"
         "金额单位用人民币元，百分比用0-1小数，例如50%写0.5。\n"
@@ -268,10 +272,12 @@ def run_task_definition_agent(
                         "default_period_end": period_end,
                         "supported_metrics": metric_specs,
                         "known_consultants": consultant_list[:120],
+                        "planning_context": planning_context,
                         "conversation": compact_history,
                         "latest_user_message": user_message,
                     },
                     ensure_ascii=False,
+                    default=str,
                 ),
             },
         ],
@@ -336,7 +342,7 @@ def _loads_agent_json(content: str) -> Dict[str, object]:
         raise
 
 
-def _preflight_okr_clarification(user_message: str, consultants: Iterable[str]) -> str:
+def _preflight_okr_clarification(user_message: str, consultants: Iterable[str], planning_context: Dict[str, object] | None = None) -> str:
     text = str(user_message or "").strip()
     if not text:
         return ""
@@ -349,10 +355,155 @@ def _preflight_okr_clarification(user_message: str, consultants: Iterable[str]) 
     metric_label = METRIC_DEFINITIONS.get(metric_key, {}).get("label", metric_key)
     owner_part = f"{owner_name} 的" if owner_name else ""
     unit_hint = "金额目标是多少？例如：Offer储备金额 >= 50万。" if METRIC_DEFINITIONS.get(metric_key, {}).get("unit") == "money" else "目标值是多少？"
+    context_text = _planning_context_brief(planning_context or {})
     return (
         f"我已识别到你要为 {owner_part}{metric_label} 设置 OKR/KR，但还缺少可核查目标值。"
-        f"请补充：{unit_hint}"
+        f"{context_text}"
+        f"请补充或确认：{unit_hint}"
     )
+
+
+def _okr_planning_context(
+    user_message: str,
+    consultants: Iterable[str],
+    config: Dict[str, object],
+    context: Dict[str, object],
+) -> Dict[str, object]:
+    owner_name, confidence = _match_owner(user_message, consultants)
+    owner_type = "consultant" if owner_name else "company"
+    period_start, period_end = _infer_period(user_message, config)
+    analysis_end = pd.to_datetime(config.get("end_date"), errors="coerce")
+    if pd.isna(analysis_end):
+        analysis_end = pd.Timestamp.today().normalize()
+    lookback_start = (analysis_end - pd.Timedelta(days=180)).date().isoformat()
+    lookback_end = analysis_end.date().isoformat()
+    base_task = {
+        "owner_type": owner_type,
+        "owner_name": owner_name,
+        "period_start": period_start,
+        "period_end": period_end,
+    }
+    lookback_task = {
+        "owner_type": owner_type,
+        "owner_name": owner_name,
+        "period_start": lookback_start,
+        "period_end": lookback_end,
+    }
+    snapshot = {
+        "owner_type": owner_type,
+        "owner_name": owner_name,
+        "owner_match_confidence": confidence,
+        "assessment_period": {"start": period_start, "end": period_end},
+        "lookback_180d": {"start": lookback_start, "end": lookback_end},
+        "facts": {},
+    }
+    if not context:
+        return snapshot
+
+    facts = snapshot["facts"]
+    facts["assessment_offer_reserve_amount"] = _metric_fact("offer_unpaid_amount", base_task, context)
+    facts["assessment_collection_amount"] = _metric_fact("collection_amount", base_task, context)
+    facts["current_weighted_forecast"] = _metric_fact("weighted_forecast", base_task, context)
+    for metric_key in [
+        "new_referrals",
+        "avg_referrals_per_project",
+        "new_interviews",
+        "referral_to_interview_rate",
+        "interview_to_offer_rate",
+        "new_offers",
+    ]:
+        facts[f"lookback_180d_{metric_key}"] = _metric_fact(metric_key, lookback_task, context)
+
+    cost_fact = _consultant_cost_fact(owner_name, period_start, period_end, context)
+    if cost_fact:
+        facts["consultant_cost"] = cost_fact
+    scorecard_fact = _consultant_scorecard_fact(owner_name, context)
+    if scorecard_fact:
+        facts["consultant_scorecard"] = scorecard_fact
+    return snapshot
+
+
+def _metric_fact(metric_key: str, task: Dict[str, object], context: Dict[str, object]) -> Dict[str, object]:
+    actual, evidence, source = _actual_value(metric_key, task, context)
+    unit = METRIC_DEFINITIONS.get(metric_key, {}).get("unit", "count")
+    return {
+        "metric_key": metric_key,
+        "label": METRIC_DEFINITIONS.get(metric_key, {}).get("label", metric_key),
+        "value": actual,
+        "display": _format_value(actual, unit),
+        "evidence_count": len(evidence),
+        "data_source": source,
+    }
+
+
+def _consultant_cost_fact(owner_name: str, period_start: str, period_end: str, context: Dict[str, object]) -> Dict[str, object]:
+    if not owner_name:
+        return {}
+    cost = context.get("cost", {})
+    ranking = cost.get("ranking", pd.DataFrame()) if isinstance(cost, dict) else pd.DataFrame()
+    if ranking is None or ranking.empty:
+        return {}
+    rows = _filter_owner(ranking.copy(), {"owner_type": "consultant", "owner_name": owner_name})
+    if rows.empty:
+        return {}
+    row = rows.iloc[0]
+    monthly_cost = float(pd.to_numeric(pd.Series([row.get("monthly_cost")]), errors="coerce").fillna(0).iloc[0])
+    start = pd.to_datetime(period_start, errors="coerce")
+    end = pd.to_datetime(period_end, errors="coerce")
+    months = _calendar_month_span(start, end)
+    return {
+        "monthly_cost": monthly_cost,
+        "monthly_cost_display": _format_value(monthly_cost, "money"),
+        "assessment_months": months,
+        "assessment_cost": monthly_cost * months,
+        "assessment_cost_display": _format_value(monthly_cost * months, "money"),
+        "total_collection": float(pd.to_numeric(pd.Series([row.get("total_collection")]), errors="coerce").fillna(0).iloc[0]),
+    }
+
+
+def _consultant_scorecard_fact(owner_name: str, context: Dict[str, object]) -> Dict[str, object]:
+    if not owner_name:
+        return {}
+    perf = context.get("consultant_performance", {})
+    scorecard = perf.get("scorecard", pd.DataFrame()) if isinstance(perf, dict) else pd.DataFrame()
+    if scorecard is None or scorecard.empty:
+        return {}
+    rows = _filter_owner(scorecard.copy(), {"owner_type": "consultant", "owner_name": owner_name})
+    if rows.empty:
+        return {}
+    row = rows.iloc[0]
+    keys = [
+        "efficiency_level",
+        "maturity_stage",
+        "tenure_months",
+        "offer_reserve_months",
+        "forecast_cover_months",
+        "sustainability_profile",
+        "risk_flags",
+        "management_signal",
+    ]
+    return {key: row.get(key) for key in keys if key in row.index}
+
+
+def _calendar_month_span(start: pd.Timestamp, end: pd.Timestamp) -> float:
+    if pd.isna(start) or pd.isna(end) or end < start:
+        return 1.0
+    return round(((end - start).days + 1) / 30.0, 2)
+
+
+def _planning_context_brief(planning_context: Dict[str, object]) -> str:
+    facts = planning_context.get("facts", {}) if isinstance(planning_context, dict) else {}
+    if not facts:
+        return ""
+    bits = []
+    cost = facts.get("consultant_cost", {})
+    if cost:
+        bits.append(f"本考核周期估算顾问成本约 {cost.get('assessment_cost_display')}。")
+    for key in ["assessment_offer_reserve_amount", "current_weighted_forecast", "lookback_180d_new_referrals", "lookback_180d_referral_to_interview_rate"]:
+        item = facts.get(key, {})
+        if item:
+            bits.append(f"{item.get('label')}：{item.get('display')}")
+    return " 当前参考数据：" + "；".join(bits[:5]) + "。"
 
 
 def _mentioned_metric_key(text: str) -> str:

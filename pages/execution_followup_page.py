@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Callable, Dict
 
 import pandas as pd
@@ -25,6 +26,12 @@ DEFAULT_AGENT_PROVIDER = "Kimi / Moonshot CN"
 DEFAULT_AGENT_MODEL = "kimi-k2.5"
 DEFAULT_AGENT_MAX_TOKENS = 1800
 DEFAULT_AGENT_TIMEOUT = 90
+REVIEW_STATE_KEY = "execution_followup_review_state"
+
+
+def _safe_component_key(value: object) -> str:
+    text = re.sub(r"[^0-9A-Za-z_]+", "_", str(value or "item")).strip("_")
+    return text[:80] or "item"
 
 
 def render_execution_followup(
@@ -597,7 +604,28 @@ def _render_library_review_controls(
                 context = review_context_loader()
         else:
             context = base_context
-        _render_review_by_owner(active, context)
+        st.session_state[REVIEW_STATE_KEY] = {
+            "tasks": active,
+            "context": context,
+            "period_start": pd.to_datetime(review_start).date().isoformat(),
+            "period_end": pd.to_datetime(review_end).date().isoformat(),
+            "consultants": selected_consultants,
+            "include_non_consultant": include_non_consultant,
+        }
+
+    review_state = st.session_state.get(REVIEW_STATE_KEY)
+    if review_state:
+        consultants_label = "、".join(review_state.get("consultants") or [])
+        if review_state.get("include_non_consultant"):
+            consultants_label = f"{consultants_label} + 团队/公司任务" if consultants_label else "团队/公司任务"
+        st.caption(
+            f"当前显示上次核对结果：{review_state.get('period_start')} 至 {review_state.get('period_end')}"
+            + (f" | {consultants_label}" if consultants_label else "")
+        )
+        if st.button("清空核对结果", key="clear_library_review_result"):
+            st.session_state.pop(REVIEW_STATE_KEY, None)
+            st.rerun()
+        _render_review_by_owner(review_state["tasks"], review_state["context"])
 
 
 def _render_review_by_owner(active: pd.DataFrame, context: Dict[str, object]) -> None:
@@ -647,12 +675,16 @@ def _render_review_by_owner(active: pd.DataFrame, context: Dict[str, object]) ->
                 "查看该顾问任务证据",
                 task_options,
                 format_func=lambda x: labels.get(x, x),
-                key=f"evidence_select_{owner}",
+                key=f"evidence_select_{_safe_component_key(owner)}",
             )
             row = owner_reviewed[owner_reviewed["id"].astype(str).eq(str(selected))].iloc[0].to_dict()
             evidence = evidence_for_task(row, context)
             if evidence.empty:
-                st.warning("该任务没有可展示的证据明细。")
+                data_source = str(row.get("data_source") or "")
+                if data_source.startswith("pending_schema:"):
+                    st.warning("该指标还没有接入可核查的明细数据源，所以当前只能显示核对结果，不能展开证据明细。")
+                else:
+                    st.warning("该任务在当前核对周期内没有可展示的证据明细。")
             else:
                 st.dataframe(evidence, use_container_width=True, hide_index=True)
 

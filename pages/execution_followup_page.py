@@ -40,21 +40,25 @@ def render_execution_followup(
     review_context_loader: Callable[[], Dict[str, object]] | None = None,
 ) -> None:
     st.markdown("### 执行跟进")
-    st.caption("把月会行动项拆成可核查指标，并在复盘时直接从系统数据追踪完成情况。")
+    st.caption("按 Objective -> KR -> 周跟进 -> 复盘核查的闭环管理月会行动项。")
 
     tasks_df = load_tasks()
     consultants = _consultant_options(context)
 
     mode = st.radio(
         "执行跟进模式",
-        ["指标录入", "任务库"],
+        ["Objective目标", "KR指标", "周跟进", "复盘核查"],
         horizontal=True,
         label_visibility="collapsed",
     )
-    if mode == "指标录入":
-        _render_task_definition(config, consultants, context)
+    if mode == "Objective目标":
+        _render_objective_step(tasks_df, config, consultants)
+    elif mode == "KR指标":
+        _render_kr_step(config, consultants, context)
+    elif mode == "周跟进":
+        _render_weekly_step(tasks_df)
     else:
-        _render_task_library(tasks_df, context, config, review_context_loader)
+        _render_review_step(tasks_df, context, config, review_context_loader)
 
 
 def _render_task_definition(config: Dict[str, object], consultants: list[str], context: Dict[str, object]) -> None:
@@ -67,6 +71,53 @@ def _render_task_definition(config: Dict[str, object], consultants: list[str], c
 
     with st.expander("OKR 任务拆解助手", expanded=False):
         _render_task_agent(config, consultants, context)
+
+
+def _render_objective_step(tasks_df: pd.DataFrame, config: Dict[str, object], consultants: list[str]) -> None:
+    st.markdown("#### Objective 目标设定")
+    st.caption("先记录方向型目标：客户结构、目标客户/岗位/领域、BD方向、交付质量或回款专项。")
+    _render_management_goal_builder(config, consultants)
+    goals = tasks_df[tasks_df["metric_key"].astype(str).eq("management_goal")].copy() if tasks_df is not None and not tasks_df.empty else pd.DataFrame()
+    st.divider()
+    st.markdown("#### 已设 Objective")
+    if goals.empty:
+        st.info("还没有 Objective。先在上方新增管理目标。")
+    else:
+        _render_grouped_task_list(goals)
+
+
+def _render_kr_step(config: Dict[str, object], consultants: list[str], context: Dict[str, object]) -> None:
+    st.markdown("#### KR 指标拆解")
+    st.caption("把 Objective 拆成可核查 KR。可以手动选择指标，也可以让 OKR 助手结合顾问数据建议目标。")
+    _render_manual_task_builder(config, consultants)
+    with st.expander("OKR 任务拆解助手", expanded=True):
+        _render_task_agent(config, consultants, context)
+
+
+def _render_weekly_step(tasks_df: pd.DataFrame) -> None:
+    st.markdown("#### 周跟进")
+    st.caption("按周更新 Objective 进展，提前发现月底无法达成的风险。")
+    if tasks_df is None or tasks_df.empty:
+        st.info("任务库为空。")
+        return
+    filtered = _task_library_filters(tasks_df)
+    if filtered.empty:
+        st.info("当前筛选条件下没有任务。")
+        return
+    _render_weekly_followup_panel(filtered)
+    st.divider()
+    _render_grouped_task_list(filtered)
+
+
+def _render_review_step(
+    tasks_df: pd.DataFrame,
+    base_context: Dict[str, object],
+    config: Dict[str, object],
+    review_context_loader: Callable[[], Dict[str, object]] | None = None,
+) -> None:
+    st.markdown("#### 复盘核查")
+    st.caption("按顾问或团队核查 KR 完成情况，并查看系统证据明细。")
+    _render_task_library(tasks_df, base_context, config, review_context_loader)
 
 
 def _render_management_goal_builder(config: Dict[str, object], consultants: list[str]) -> None:

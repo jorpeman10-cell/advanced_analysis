@@ -257,6 +257,8 @@ def render_management_review(context: Dict[str, object]) -> None:
         cols = [
             "consultant",
             "team",
+            "maturity_stage",
+            "tenure_months",
             "efficiency_level",
             "total_collection",
             "period_cost",
@@ -1039,6 +1041,7 @@ def render_consultant_performance(context: Dict[str, object]) -> None:
             - Forecast覆盖月份 = Forecast加权预测金额 / 顾问月成本。
             - Forecast覆盖率 = Forecast加权预测金额 / 预测窗口内累计月成本。
             - 过程转化只作为风险提示，不再折算为综合分。
+            - 成果转化周期约按半年观察；入职未满6个月的顾问重点看Pipeline、Forecast、推荐量、推面比等过程指标。
             """
         )
 
@@ -1056,6 +1059,8 @@ def render_consultant_performance(context: Dict[str, object]) -> None:
         cols = [
             "consultant",
             "team",
+            "maturity_stage",
+            "tenure_months",
             "efficiency_level",
             "total_collection",
             "period_cost",
@@ -1070,6 +1075,8 @@ def render_consultant_performance(context: Dict[str, object]) -> None:
         cols = [
             "consultant",
             "team",
+            "maturity_stage",
+            "tenure_months",
             "efficiency_level",
             "sustainability_profile",
             "offer_unpaid_amount",
@@ -1084,6 +1091,8 @@ def render_consultant_performance(context: Dict[str, object]) -> None:
     display_cols = [
         "consultant",
         "team",
+        "maturity_stage",
+        "tenure_months",
         "efficiency_level",
         "monthly_cost",
         "total_collection",

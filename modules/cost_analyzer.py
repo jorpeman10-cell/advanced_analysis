@@ -106,8 +106,20 @@ class CostEfficiencyAnalyzer:
             axis=1,
         )
         consultants["monthly_cost"] = consultants["base_salary"] * self.salary_multiplier
+        today = pd.Timestamp(datetime.now().date())
         months_elapsed = max(datetime.now().month - 1, 0) + min(datetime.now().day / pd.Timestamp(datetime.now().date()).days_in_month, 1.0)
         months_elapsed = max(months_elapsed, 1.0)
+        if "joinInDate" in consultants.columns:
+            consultants["tenure_months"] = consultants["joinInDate"].apply(
+                lambda value: _months_between(pd.to_datetime(value, errors="coerce"), today)
+                if pd.notna(pd.to_datetime(value, errors="coerce"))
+                else None
+            )
+        else:
+            consultants["tenure_months"] = None
+        consultants["maturity_stage"] = consultants["tenure_months"].apply(
+            lambda value: "Ramp-up (<6m)" if pd.notna(value) and float(value) < 6 else "Mature"
+        )
 
         company_total_collection = 0.0
         departed_period_cost = 0.0

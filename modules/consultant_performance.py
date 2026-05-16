@@ -125,6 +125,7 @@ class ConsultantPerformanceAnalyzer:
             "offer_to_onboard",
             "onboard_to_paid",
             "overall",
+            "tenure_months",
         ]
         for col in numeric_cols:
             if col in scorecard.columns:
@@ -182,6 +183,8 @@ class ConsultantPerformanceAnalyzer:
         return (
             "顾问360评价 = 本财年已回款(过去成绩)25% + 当前Offer未回款(余粮)35% "
             "+ Pipeline加权预测业绩(未来产能)20% + 推荐/面试/Offer/入职/回款转化(能力与态度)20%。"
+            "成果转化通常需要约半年；入职未满6个月的顾问，评价应重点看Pipeline、Forecast、推荐到面试、面试推进等过程指标，"
+            "结果回款不足不直接等同于产能失败。"
         )
 
     @staticmethod
@@ -270,7 +273,12 @@ class ConsultantPerformanceAnalyzer:
         weighted_forecast = _safe_num(row.get("weighted_forecast"))
         interview_to_offer = _safe_num(row.get("interview_to_offer"))
         total_collection = _safe_num(row.get("total_collection"))
+        tenure_months = _safe_num(row.get("tenure_months"))
 
+        if 0 < tenure_months < 6:
+            if weighted_forecast >= 50000 or _safe_num(row.get("referral_to_interview")) >= 0.30 or _safe_num(row.get("referrals")) >= 20:
+                return "Ramp-up / Process Tracking"
+            return "Ramp-up Watch"
         if total_collection >= 300000 and offer_amount >= 300000:
             return "Growth / Near Target"
         if score >= 65 and (offer_amount < 100000 or offer_count <= 1) and interview_to_offer < 0.12:
@@ -288,14 +296,21 @@ class ConsultantPerformanceAnalyzer:
     @staticmethod
     def _risk_flags(row: pd.Series) -> str:
         flags = []
-        if _safe_num(row.get("offer_count")) <= 1 or _safe_num(row.get("offer_unpaid_amount")) < 100000:
+        tenure_months = _safe_num(row.get("tenure_months"))
+        offer_months = _safe_num(row.get("offer_reserve_months"))
+        if 0 < tenure_months < 6:
+            flags.append("入职未满半年，优先看Pipeline/Forecast/推面比")
+        if tenure_months >= 6 and (_safe_num(row.get("offer_count")) <= 1 or _safe_num(row.get("offer_unpaid_amount")) < 100000):
             flags.append("Offer储备不足")
         if _safe_num(row.get("interview_to_offer")) < 0.15 and _safe_num(row.get("first_interviews")) >= 10:
             flags.append("面试到Offer转化弱")
         if _safe_num(row.get("weighted_forecast")) < 50000:
             flags.append("Pipeline潜力弱")
         if _safe_num(row.get("offer_to_paid_rate")) == 0 and _safe_num(row.get("offer_count")) > 0:
-            flags.append("Offer尚未兑现回款")
+            if offer_months >= 2:
+                flags.append("Offer余粮充足但回款慢")
+            else:
+                flags.append("Offer尚未兑现回款")
         return "；".join(flags) if flags else "暂无明显结构性风险"
 
     @staticmethod
@@ -304,10 +319,13 @@ class ConsultantPerformanceAnalyzer:
         offer_months = _safe_num(row.get("offer_reserve_months"))
         forecast_months = _safe_num(row.get("forecast_cover_months"))
         interview_to_offer = _safe_num(row.get("interview_to_offer"))
+        offer_paid_rate = _safe_num(row.get("offer_to_paid_rate"))
         if profit > 0 and offer_months >= 3:
             return "已盈利且Offer余粮充足"
         if profit > 0 and offer_months >= 1:
             return "已盈利但需盯Offer兑现"
+        if profit <= 0 and offer_months >= 2 and offer_paid_rate < 0.5:
+            return "当前未覆盖成本但Offer余粮充足，主要压力在回款兑现"
         if profit <= 0 and (offer_months >= 2 or forecast_months >= 2):
             return "当前未覆盖成本，依赖Offer/Forecast兑现"
         if forecast_months < 1 and interview_to_offer < 0.15:
@@ -339,6 +357,11 @@ class ConsultantPerformanceAnalyzer:
         reserve = _safe_num(row.get("offer_reserve_score"))
         future = _safe_num(row.get("future_score"))
         process = _safe_num(row.get("process_score"))
+        tenure_months = _safe_num(row.get("tenure_months"))
+        offer_months = _safe_num(row.get("offer_reserve_months"))
+        offer_paid_rate = _safe_num(row.get("offer_to_paid_rate"))
+        if 0 < tenure_months < 6:
+            return "入职未满半年，结果指标尚未充分释放；重点追踪Pipeline、Forecast、推荐量、推面比和面试推进。"
         if status == "Growth / Near Target":
             return "本年回款和当前Offer储备都较强，重点管理Offer兑现、入职和回款节奏。"
         if status == "Score Inflated / PIP Review":
@@ -348,6 +371,8 @@ class ConsultantPerformanceAnalyzer:
         if past >= 75 and future < 45:
             return "过去业绩较好，但未来产能不足，需要补Pipeline。"
         if past < 45 and (reserve >= 60 or future >= 60):
+            if offer_months >= 2 and offer_paid_rate < 0.5:
+                return "短期回款弱但Offer余粮充足，主问题是回款兑现节奏和客户账期，不应简单归因为Offer转化弱。"
             return "短期回款弱，但存在Offer/Forecast储备，应盯兑现。"
         if process < 45:
             return "过程动作或转化弱，优先复盘推荐质量、面试推进和岗位匹配。"

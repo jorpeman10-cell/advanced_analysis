@@ -155,7 +155,7 @@ class BusinessAnalysisToolkit:
             "summary": cost.get("summary", {}),
             "top_pressure": _top_records(
                 ranking,
-                ["consultant", "team", "base_salary", "monthly_cost", "total_collection", "monthly_collection", "period_cost", "cost_revenue_ratio", "efficiency_rating"],
+                ["consultant", "team", "maturity_stage", "tenure_months", "base_salary", "monthly_cost", "total_collection", "monthly_collection", "period_cost", "cost_revenue_ratio", "efficiency_rating"],
                 "cost_revenue_ratio",
                 10,
             ),
@@ -179,13 +179,13 @@ class BusinessAnalysisToolkit:
             "weights": performance.get("weights", {}) if isinstance(performance, dict) else {},
             "top_consultants": _top_records(
                 scorecard,
-                ["consultant", "team", "efficiency_level", "total_collection", "period_cost", "collection_profit", "collection_profit_margin", "offer_reserve_months", "forecast_cover_months", "sustainability_profile"],
+                ["consultant", "team", "maturity_stage", "tenure_months", "efficiency_level", "total_collection", "period_cost", "collection_profit", "collection_profit_margin", "offer_reserve_months", "forecast_cover_months", "sustainability_profile"],
                 "collection_profit",
                 8,
             ),
             "watch_list": _top_records(
                 scorecard.sort_values(["offer_reserve_months", "forecast_cover_months"], ascending=[True, True]) if isinstance(scorecard, pd.DataFrame) and not scorecard.empty else scorecard,
-                ["consultant", "team", "efficiency_level", "sustainability_profile", "offer_unpaid_amount", "offer_reserve_months", "weighted_forecast", "forecast_cover_months", "risk_flags", "management_signal"],
+                ["consultant", "team", "maturity_stage", "tenure_months", "efficiency_level", "sustainability_profile", "offer_unpaid_amount", "offer_reserve_months", "weighted_forecast", "forecast_cover_months", "risk_flags", "management_signal"],
                 "",
                 8,
             ),

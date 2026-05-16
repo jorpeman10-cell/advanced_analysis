@@ -253,6 +253,9 @@ def _build_agent_guardrails(tool_results: List[Dict[str, object]]) -> str:
         "此时只能表述为：现金仍为正，但存在回款兑现、成本覆盖或安全边际收窄压力。",
         "不得引用未在工具结果中提供的行业基准或安全线，例如'猎头行业6个月安全警戒线'。",
         "不得把 Forecast 加权收入、Pipeline总额和实际回款混为一谈；必须区分确认应收、Forecast加权回款、Pipeline预测。",
+        "评价顾问时必须加入时间维度：猎头顾问从Pipeline/推荐/面试到Offer/回款的成果转化周期约为半年。",
+        "如果顾问 tenure_months 小于6或 maturity_stage 为 Ramp-up (<6m)，主判断应看Pipeline、Forecast、推荐量、推面比、面试推进等过程指标，不要用回款不足直接判定结果失败。",
+        "如果顾问 offer_reserve_months 较高、offer_unpaid_amount较高，但 total_collection或offer_to_paid_rate低，主问题应表述为回款兑现慢/客户账期/应收跟进，而不是简单归因为Offer转化弱。",
     ]
     if balance_90 is not None or balance_180 is not None:
         lines.append(
@@ -273,6 +276,7 @@ def _build_intent_guardrails(question: str, consultant_focus: List[str]) -> str:
                 "- 必须以这些顾问为主体回答，直接说明该顾问本月/当前数据情况、风险和动作。",
                 "- 不要把公司整体现金流、整体健康分、整体成本收入比作为主结论；只能作为背景补充。",
                 "- 优先使用 consultant_detail 工具中的 scorecard、cost、conversion、pipeline、offers、project_additions。",
+                "- 对该顾问的结论必须区分：结果回款、Offer余粮、Forecast/Pipeline、过程指标、入职成熟周期。余粮充足但回款慢时，管理动作应优先围绕回款/账期/客户催收。",
                 "- 如果该顾问某项数据为空，明确说该维度暂无数据，不要用其他顾问或公司整体数据替代。",
             ]
         )

@@ -27,7 +27,7 @@ METRIC_DEFINITIONS = {
     "referral_to_interview_rate": {"label": "推面比", "unit": "percent", "default_operator": ">="},
     "interview_to_offer_rate": {"label": "一面到Offer", "unit": "percent", "default_operator": ">="},
     "new_offers": {"label": "新增Offer数", "unit": "count", "default_operator": ">="},
-    "offer_unpaid_amount": {"label": "总未回款储备", "unit": "money", "default_operator": "<="},
+    "offer_unpaid_amount": {"label": "Offer储备金额", "unit": "money", "default_operator": ">="},
     "collection_amount": {"label": "回款金额", "unit": "money", "default_operator": ">="},
     "weighted_forecast": {"label": "Forecast加权金额", "unit": "money", "default_operator": ">="},
 }
@@ -144,6 +144,7 @@ def parse_management_tasks(text: str, consultants: Iterable[str], config: Dict[s
         ("referral_to_interview_rate", [r"推面比.*?(\d+(?:\.\d+)?)\s*%", r"推荐到面试.*?(\d+(?:\.\d+)?)\s*%"]),
         ("interview_to_offer_rate", [r"一面到\s*Offer.*?(\d+(?:\.\d+)?)\s*%", r"面试到\s*Offer.*?(\d+(?:\.\d+)?)\s*%"]),
         ("new_offers", [r"Offer\s*(?:新增)?\s*(\d+)", r"新增\s*Offer\s*(\d+)"]),
+        ("offer_unpaid_amount", [r"(?:Offer)?\s*(?:储备|未回款).*?(\d+(?:\.\d+)?)\s*(万)?"]),
         ("collection_amount", [r"回款\s*(\d+(?:\.\d+)?)\s*(万)?"]),
         ("weighted_forecast", [r"Forecast\s*(\d+(?:\.\d+)?)\s*(万)?"]),
     ]
@@ -218,6 +219,14 @@ def run_task_definition_agent(
         for item in (chat_history or [])[-8:]
         if item.get("content")
     ]
+    preflight = _preflight_okr_clarification(user_message, consultants)
+    if preflight:
+        return {
+            "status": "clarify",
+            "assistant_message": preflight,
+            "tasks": [],
+            "model": model,
+        }
     okr_skill_prompt = (
         "OKR Coach 方法论：Objective 是方向性目标，必须定性、清晰、有周期边界、团队可影响，"
         "不要把数字写进 Objective；Key Result 是衡量目标是否达成的关键结果，必须 SMART：具体、可衡量、"
@@ -232,6 +241,7 @@ def run_task_definition_agent(
         f"{okr_skill_prompt}\n"
         "你只能做任务定义，不要核查完成情况，不要声称读取了系统结果。\n"
         "如果信息不足，先提出1-3个具体澄清问题；如果信息足够，输出任务草案。\n"
+        "如果用户只给了对象、周期和指标名称，但没有给目标数值或目标状态，必须返回clarify，不要生成tasks。\n"
         "任务草案必须使用给定 metric_key，不要自造指标。对象可以是 consultant/team/company。"
         "JSON里的theme字段写Objective方向，例如'客户结构改善'；task字段写KR或行动指标，例如'BD新增客户数 >= 2'。"
         "金额单位用人民币元，百分比用0-1小数，例如50%写0.5。\n"
@@ -324,6 +334,57 @@ def _loads_agent_json(content: str) -> Dict[str, object]:
         if start >= 0 and end > start:
             return json.loads(text[start : end + 1])
         raise
+
+
+def _preflight_okr_clarification(user_message: str, consultants: Iterable[str]) -> str:
+    text = str(user_message or "").strip()
+    if not text:
+        return ""
+    metric_key = _mentioned_metric_key(text)
+    if not metric_key:
+        return ""
+    if _has_numeric_target(text):
+        return ""
+    owner_name, _ = _match_owner(text, consultants)
+    metric_label = METRIC_DEFINITIONS.get(metric_key, {}).get("label", metric_key)
+    owner_part = f"{owner_name} 的" if owner_name else ""
+    unit_hint = "金额目标是多少？例如：Offer储备金额 >= 50万。" if METRIC_DEFINITIONS.get(metric_key, {}).get("unit") == "money" else "目标值是多少？"
+    return (
+        f"我已识别到你要为 {owner_part}{metric_label} 设置 OKR/KR，但还缺少可核查目标值。"
+        f"请补充：{unit_hint}"
+    )
+
+
+def _mentioned_metric_key(text: str) -> str:
+    lowered = str(text or "").lower()
+    checks = [
+        ("offer_unpaid_amount", ["offer储备", "offer 储备", "未回款储备", "储备金额"]),
+        ("collection_amount", ["回款金额", "回款"]),
+        ("weighted_forecast", ["forecast", "预测金额"]),
+        ("new_offers", ["新增offer", "offer新增"]),
+        ("new_interviews", ["新增面试", "面试"]),
+        ("referral_to_interview_rate", ["推面比", "推荐到面试"]),
+        ("new_bd_clients", ["bd客户", "bd 客户"]),
+        ("new_case_bd", ["case bd", "casebd"]),
+        ("new_projects", ["新增岗位", "新增项目"]),
+        ("avg_referrals_per_project", ["平均推荐量"]),
+        ("new_referrals", ["新增推荐", "推荐数"]),
+    ]
+    for metric_key, patterns in checks:
+        if any(pattern.lower() in lowered for pattern in patterns):
+            return metric_key
+    return ""
+
+
+def _has_numeric_target(text: str) -> bool:
+    value = str(text or "")
+    if re.search(r"(?:>=|<=|=|不少于|不低于|至少|达到|达成|目标)\s*\d+(?:\.\d+)?", value, flags=re.IGNORECASE):
+        return True
+    if re.search(r"\d+(?:\.\d+)?\s*(?:万|元|%|个|家|条)", value):
+        return True
+    if re.search(r"(?:储备金额|回款金额|forecast|平均推荐量|新增推荐数|新增面试数|新增offer数)\s*\d+(?:\.\d+)?", value, flags=re.IGNORECASE):
+        return True
+    return any(token in value for token in ["完成"])
 
 
 def _strip_invalid_json_controls(text: str) -> str:

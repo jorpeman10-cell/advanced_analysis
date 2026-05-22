@@ -40,6 +40,54 @@ Keep answers grounded in the tool's field definitions, business stage logic, cas
 - Do not call slow collection an Offer conversion problem when reserve is healthy and the risk is payment timing or receivables follow-up.
 - Do not invent consultant, customer, or cashflow facts when the tool data or user evidence is absent.
 
+## Gllue Data Digest
+
+Use this compact map when bundled references are not available:
+
+| Domain | Tables | Main Keys | Core Use |
+|---|---|---|---|
+| Consultant organization | `user`, `team` | `user.team_id -> team.id` | Consultant name, team, active status, join and leave dates. |
+| Client and terms | `client`, `clientcontract` | `clientcontract.client_id -> client.id` | Client name and contract payment terms. |
+| Project | `joborder` | `joborder.client_id -> client.id` | New project count, live jobs, role/client structure. |
+| Referral process | `jobsubmission`, `cvsent`, `clientinterview` | Process tables link through `jobsubmission_id`; jobsubmission links to joborder | Referral count, interview count, referral-to-interview ratio, average referrals. |
+| Business stage | `offersign`, `invoice`, `invoiceassignment` | Offer and invoice facts link to jobsubmission/joborder; allocations link through `invoiceassignment.invoice_id` | Offer checks, Invoice stage, Collection stage, consultant revenue splits. |
+| Pipeline | `forecast`, `forecastassignment` | `forecast.job_order_id -> joborder.id`; `forecastassignment.forecast_id -> forecast.id` | Forecast amount, stage, expected close date, consultant pipeline split. |
+
+For consultant-level revenue or reserve, prefer `invoiceassignment.revenue` when a split exists.
+For company invoice amount, use `invoice.invoiceAmount`.
+For company collection, use `invoice.paymentReceived` and `invoice.paymentReceivedDate`.
+For actual consultant collection contribution, use received invoices plus assignment revenue.
+
+Build unpaid-invoice due dates in this order:
+1. `invoice.estimatepaymentReceivedDate`.
+2. `invoice.sentDate + invoice.payment_days`.
+3. `invoice.sentDate + clientcontract.payment_terms`.
+4. `invoice.dateAdded + 35 days` for `Invoice Added` fallback.
+
+When a number conflicts with a Gllue export, check period, business stage, prior-year carryover, inactive/void records, collaboration split, and join grain before changing a formula.
+
+## OKR Follow-up Digest
+
+Execution follow-up should use four product steps:
+1. Objective target.
+2. KR indicator entry.
+3. Weekly follow-up.
+4. Completion review and evidence.
+
+Keep Objective qualitative. Keep KR checkable with owner, period, metric, operator, and target.
+Prefer system-supported metrics such as:
+
+- `BD新增客户数`.
+- `新增岗位/项目数`.
+- `平均推荐量`.
+- `推面比`.
+- `新增Offer数`.
+- `回款金额`.
+- `Offer储备金额`.
+
+Treat `task` as the manager-facing sentence, `metric` as the structured review measure, and `target_value` as the machine-checkable number.
+For percentages, clarify whether the stored value is decimal form such as `0.5` or display form such as `50%`.
+
 ## Output Patterns
 
 For a metric explanation, answer in this order:

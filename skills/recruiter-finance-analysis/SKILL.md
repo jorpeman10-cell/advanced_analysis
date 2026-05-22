@@ -1,6 +1,6 @@
 ---
 name: recruiter-finance-analysis
-description: Use this skill when an agent needs to work with the Recruiter Finance Tool / Advanced Analysis for a headhunter business: interpret the three-speed model, cashflow, forecast, consultant performance, Offer/Invoice/Collection stage metrics, customer payment terms, management review, and OKR execution follow-up; explain metric口径 and data anomalies; turn management actions into measurable KR/check tasks; or plan integration with the Streamlit tool, Gllue data, GitHub, or Lobe skills.
+description: "Use this skill for Recruiter Finance Tool analysis, metric definitions, cashflow, forecast, consultant performance, Offer Invoice Collection stage review, OKR execution follow-up, data anomaly review, and Lobe integration planning."
 ---
 
 # Recruiter Finance Analysis

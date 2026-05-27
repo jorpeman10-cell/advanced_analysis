@@ -17,6 +17,13 @@ live Gllue evidence. It does not write tasks or change database records.
 | `get_receivables_cashflow` | Open invoices, overdue evidence and client payment terms |
 | `review_execution_metric` | Read-only completion check for one consultant target |
 
+## Conversation Performance
+
+- Identical data loads are cached for 10 minutes so one Lobe conversation does not repeatedly open SSH/database sessions.
+- Consultant, forecast, and receivable tools return summary data by default. Use `include_evidence=true` only for record-level checking.
+- `get_consultant_review` accepts one named consultant only. Use `get_company_stage_metrics` for company totals.
+- For an initial management answer, prefer no more than three targeted calls and expand evidence only if the user requests verification.
+
 ## Local Setup
 
 Install the added dependency in the Python environment used to run the app:

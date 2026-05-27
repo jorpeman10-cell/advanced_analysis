@@ -150,6 +150,113 @@ class V2DataService:
         process["stage_source"] = "jobsubmission_process"
         return process
 
+    def load_consultant_process_data(self, user_id: int, start_date: str, end_date: str) -> pd.DataFrame:
+        """Build process rows for one consultant without scanning every user's pipeline."""
+        user_id = int(user_id)
+        process = self.db_client.query(f"""
+            SELECT cs.id AS cvsent_id, cs.jobsubmission_id, cs.user_id,
+                   {_name_expr('u')} AS consultant,
+                   cs.client_id, cs.joborder_id, cs.dateAdded AS resume_sent_date,
+                   jo.jobTitle AS position_name, jo.jobStatus AS job_status,
+                   jo.openDate AS job_open_date, jo.closeDate AS job_close_date,
+                   jo.jobStatusUpdateDate AS job_status_update_date,
+                   jo.close_reason, jo.close_note, jo.function_normal,
+                   c.name AS client_name, t.name AS team,
+                   (
+                       SELECT MIN(ci.date) FROM clientinterview ci
+                       WHERE ci.jobsubmission_id = cs.jobsubmission_id
+                         AND ci.date >= '{start_date}' AND ci.date <= '{end_date}'
+                         AND ci.active = 1
+                   ) AS first_interview_date,
+                   (
+                       SELECT MIN(os.signDate) FROM offersign os
+                       WHERE os.jobsubmission_id = cs.jobsubmission_id
+                         AND os.signDate >= '{start_date}' AND os.signDate <= '{end_date}'
+                         AND os.active = 1
+                   ) AS offer_date,
+                   (
+                       SELECT MIN(COALESCE(os.onboardDate, js.estimate_onboardDate))
+                       FROM offersign os
+                       LEFT JOIN jobsubmission js ON os.jobsubmission_id = js.id
+                       WHERE os.jobsubmission_id = cs.jobsubmission_id
+                         AND os.signDate >= '{start_date}' AND os.signDate <= '{end_date}'
+                         AND os.active = 1
+                   ) AS expected_onboard_date,
+                   (
+                       SELECT SUM(os.revenue) FROM offersign os
+                       WHERE os.jobsubmission_id = cs.jobsubmission_id
+                         AND os.signDate >= '{start_date}' AND os.signDate <= '{end_date}'
+                         AND os.active = 1
+                   ) AS fee_amount,
+                   (
+                       SELECT MIN(js.onboardDate) FROM jobsubmission js
+                       WHERE js.id = cs.jobsubmission_id AND js.active = 1
+                   ) AS onboard_date,
+                   (
+                       SELECT SUM(COALESCE(i.paymentReceived, 0)) FROM invoice i
+                       WHERE i.joborder_id = cs.joborder_id
+                         AND (i.dateAdded >= '{start_date}' OR i.paymentReceivedDate >= '{start_date}')
+                   ) AS actual_payment,
+                   (
+                       SELECT MAX(i.paymentReceivedDate) FROM invoice i
+                       WHERE i.joborder_id = cs.joborder_id
+                         AND (i.dateAdded >= '{start_date}' OR i.paymentReceivedDate >= '{start_date}')
+                   ) AS actual_payment_date
+            FROM cvsent cs
+            LEFT JOIN user u ON cs.user_id = u.id
+            LEFT JOIN team t ON u.team_id = t.id
+            LEFT JOIN joborder jo ON cs.joborder_id = jo.id
+            LEFT JOIN client c ON cs.client_id = c.id
+            WHERE cs.user_id = {user_id}
+              AND cs.dateAdded >= '{start_date}' AND cs.dateAdded <= '{end_date}'
+              AND cs.active = 1
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM cvsent earlier
+                  WHERE earlier.jobsubmission_id = cs.jobsubmission_id
+                    AND earlier.active = 1
+                    AND (
+                        earlier.dateAdded < cs.dateAdded
+                        OR (earlier.dateAdded = cs.dateAdded AND earlier.id < cs.id)
+                    )
+              )
+        """)
+        if process.empty:
+            return process
+        process = process.sort_values("resume_sent_date").drop_duplicates("jobsubmission_id", keep="first").copy()
+        for col in [
+            "resume_sent_date",
+            "first_interview_date",
+            "offer_date",
+            "expected_onboard_date",
+            "onboard_date",
+            "actual_payment_date",
+        ]:
+            process[col] = _to_datetime(process[col])
+        process["fee_amount"] = pd.to_numeric(process["fee_amount"], errors="coerce").fillna(0)
+        process["actual_payment"] = pd.to_numeric(process["actual_payment"], errors="coerce").fillna(0)
+        analysis_date = pd.to_datetime(end_date).normalize()
+        onboard_mature_cutoff = analysis_date - pd.Timedelta(days=OFFER_TO_ONBOARD_GRACE_DAYS)
+        process["is_recommended"] = process["resume_sent_date"].notna()
+        process["is_first_interview"] = process["first_interview_date"].notna()
+        process["is_offer"] = process["offer_date"].notna()
+        process["is_onboard"] = process["onboard_date"].notna() & (process["onboard_date"] <= analysis_date)
+        process["is_onboard_pending"] = process["onboard_date"].notna() & (process["onboard_date"] > analysis_date)
+        has_expected_onboard = process["expected_onboard_date"].notna()
+        process["offer_onboard_matured"] = process["is_offer"] & (
+            process["is_onboard"]
+            | (has_expected_onboard & (process["expected_onboard_date"] <= analysis_date))
+            | (~has_expected_onboard & process["onboard_date"].isna() & (process["offer_date"] <= onboard_mature_cutoff))
+        )
+        process["is_paid"] = (
+            process["is_offer"]
+            & process["is_onboard"]
+            & process["actual_payment_date"].notna()
+            & (process["actual_payment"] > 0)
+        )
+        process["stage_source"] = "jobsubmission_process"
+        return process
+
     def load_forecast_data(self, start_date: str, days: int = 180) -> pd.DataFrame:
         end_date = (pd.to_datetime(start_date) + pd.Timedelta(days=days)).date().isoformat()
         df = self.db_client.query(f"""
@@ -186,6 +293,44 @@ class V2DataService:
         df["stage_source"] = df["current_stage"].apply(lambda x: "mapped" if stage_category(x) != "Other" else "unknown")
         return df
 
+    def load_consultant_forecast_data(self, user_id: int, start_date: str, days: int = 180) -> pd.DataFrame:
+        """Load live forecast assignments assigned to one consultant."""
+        user_id = int(user_id)
+        df = self.db_client.query(f"""
+            SELECT fa.id AS assignment_id, f.id AS forecast_id, f.job_order_id AS joborder_id,
+                   jo.jobTitle AS position_name, c.name AS client_name,
+                   fa.user_id, {_name_expr('u')} AS consultant,
+                   f.forecast_fee, f.forecast_fee_after_tax,
+                   fa.amount_after_tax AS assignment_amount,
+                   fa.ratio AS assignment_ratio,
+                   f.close_date AS expected_close_date,
+                   f.last_stage AS current_stage,
+                   jo.jobStatus AS job_status
+            FROM forecastassignment fa
+            JOIN forecast f ON fa.forecast_id = f.id
+            LEFT JOIN joborder jo ON f.job_order_id = jo.id
+            LEFT JOIN client c ON jo.client_id = c.id
+            LEFT JOIN user u ON fa.user_id = u.id
+            WHERE fa.user_id = {user_id}
+              AND jo.jobStatus = 'Live'
+              AND f.close_date IS NOT NULL
+        """)
+        if df.empty:
+            return df
+        df["expected_close_date"] = _to_datetime(df["expected_close_date"])
+        df["forecast_fee"] = pd.to_numeric(df["forecast_fee"], errors="coerce").fillna(0)
+        df["assignment_amount"] = pd.to_numeric(df["assignment_amount"], errors="coerce").fillna(0)
+        df["success_rate"] = df["current_stage"].apply(stage_success_rate)
+        df["stage_category"] = df["current_stage"].apply(stage_category)
+        df["weighted_revenue"] = df["forecast_fee"] * df["success_rate"]
+        df["assignment_weighted_revenue"] = df["assignment_amount"] * df["success_rate"]
+        analysis_date = pd.to_datetime(start_date).normalize()
+        df["raw_days_to_close"] = (df["expected_close_date"].dt.normalize() - analysis_date).dt.days
+        df["is_forecast_overdue"] = df["raw_days_to_close"] < 0
+        df["days_to_close"] = df["raw_days_to_close"].clip(lower=0)
+        df["stage_source"] = df["current_stage"].apply(lambda x: "mapped" if stage_category(x) != "Other" else "unknown")
+        return df
+
     def load_collection_data(self, start_date: str, end_date: str) -> pd.DataFrame:
         df = self.db_client.query(f"""
             SELECT ia.invoice_id, ia.user_id, {_name_expr('u')} AS consultant,
@@ -197,6 +342,29 @@ class V2DataService:
             LEFT JOIN user u ON ia.user_id = u.id
             LEFT JOIN client c ON i.client_id = c.id
             WHERE i.status = 'Received'
+              AND i.paymentReceivedDate >= '{start_date}'
+              AND i.paymentReceivedDate <= '{end_date}'
+        """)
+        if df.empty:
+            return df
+        df["collection_amount"] = pd.to_numeric(df["collection_amount"], errors="coerce").fillna(0)
+        df["payment_received_date"] = _to_datetime(df["payment_received_date"])
+        return df
+
+    def load_consultant_collection_data(self, user_id: int, start_date: str, end_date: str) -> pd.DataFrame:
+        """Load received revenue assigned to one consultant."""
+        user_id = int(user_id)
+        df = self.db_client.query(f"""
+            SELECT ia.invoice_id, ia.user_id, {_name_expr('u')} AS consultant,
+                   ia.revenue AS collection_amount,
+                   i.paymentReceivedDate AS payment_received_date,
+                   i.joborder_id, c.name AS client_name
+            FROM invoiceassignment ia
+            JOIN invoice i ON ia.invoice_id = i.id
+            LEFT JOIN user u ON ia.user_id = u.id
+            LEFT JOIN client c ON i.client_id = c.id
+            WHERE ia.user_id = {user_id}
+              AND i.status = 'Received'
               AND i.paymentReceivedDate >= '{start_date}'
               AND i.paymentReceivedDate <= '{end_date}'
         """)
@@ -251,7 +419,13 @@ class V2DataService:
         df = self._add_due_date(df)
         return df
 
-    def load_fiscal_ytd_metrics(self, start_date: str, end_date: str, forecast_days: int = 180) -> Dict[str, pd.DataFrame]:
+    def load_fiscal_ytd_metrics(
+        self,
+        start_date: str,
+        end_date: str,
+        forecast_days: int = 180,
+        summary_only: bool = False,
+    ) -> Dict[str, pd.DataFrame]:
         """Load YTD Offer, Invoice, Collection, and Forecast facts.
 
         Company facts use source document totals. Consultant facts use assignment
@@ -353,6 +527,8 @@ class V2DataService:
         company["level"] = "Company"
         company["name"] = "Company"
         company["team"] = "Company"
+        if summary_only:
+            return {"company": company}
 
         consultant_offer = self.db_client.query(f"""
             SELECT 'Offer' AS metric, consultant, team,
@@ -906,6 +1082,72 @@ class V2DataService:
         consultant["level"] = "Consultant"
         consultant["name"] = consultant["consultant"]
         return {"company": company, "team": team, "consultant": consultant, "detail": df}
+
+    def load_consultant_offer_outcome_detail(self, user_id: int, start_date: str, end_date: str) -> pd.DataFrame:
+        """Load unpaid reserve and collected outcomes assigned to one consultant."""
+        user_id = int(user_id)
+        df = self.db_client.query(f"""
+            SELECT i.id AS offer_id, i.jobsubmission_id, i.joborder_id,
+                   {_name_expr('u')} AS consultant, t.name AS team,
+                   COALESCE(i.sentDate, i.dateAdded) AS offer_date,
+                   ia.revenue AS offer_amount,
+                   0 AS paid_amount,
+                   js.estimate_onboardDate AS expected_onboard_date,
+                   js.onboardDate AS actual_onboard_date,
+                   NULL AS paid_date,
+                   i.status AS invoice_status
+            FROM invoiceassignment ia
+            JOIN invoice i ON ia.invoice_id = i.id
+            LEFT JOIN jobsubmission js ON i.jobsubmission_id = js.id
+            LEFT JOIN user u ON ia.user_id = u.id
+            LEFT JOIN team t ON u.team_id = t.id
+            WHERE ia.user_id = {user_id}
+              AND i.status IN ('Invoice Added', 'Sent')
+              AND COALESCE(i.active, 1) = 1
+              AND i.jobsubmission_id IS NOT NULL
+              AND DATE(COALESCE(i.sentDate, i.dateAdded)) >= '{start_date}'
+              AND DATE(COALESCE(i.sentDate, i.dateAdded)) <= '{end_date}'
+            UNION ALL
+            SELECT i.id AS offer_id, i.jobsubmission_id, i.joborder_id,
+                   {_name_expr('u')} AS consultant, t.name AS team,
+                   i.paymentReceivedDate AS offer_date,
+                   0 AS offer_amount,
+                   ia.revenue AS paid_amount,
+                   js.estimate_onboardDate AS expected_onboard_date,
+                   js.onboardDate AS actual_onboard_date,
+                   i.paymentReceivedDate AS paid_date,
+                   i.status AS invoice_status
+            FROM invoiceassignment ia
+            JOIN invoice i ON ia.invoice_id = i.id
+            LEFT JOIN jobsubmission js ON i.jobsubmission_id = js.id
+            LEFT JOIN user u ON ia.user_id = u.id
+            LEFT JOIN team t ON u.team_id = t.id
+            WHERE ia.user_id = {user_id}
+              AND i.status = 'Received'
+              AND COALESCE(i.active, 1) = 1
+              AND i.paymentReceivedDate >= '{start_date}'
+              AND i.paymentReceivedDate <= '{end_date}'
+        """)
+        if df.empty:
+            return df
+        df["offer_date"] = _to_datetime(df["offer_date"])
+        df["expected_onboard_date"] = _to_datetime(df["expected_onboard_date"])
+        df["actual_onboard_date"] = _to_datetime(df["actual_onboard_date"])
+        df["paid_date"] = _to_datetime(df["paid_date"])
+        df["offer_amount"] = pd.to_numeric(df["offer_amount"], errors="coerce").fillna(0)
+        df["paid_amount"] = pd.to_numeric(df["paid_amount"], errors="coerce").fillna(0)
+        analysis_date = pd.to_datetime(end_date).normalize()
+        onboard_mature_cutoff = analysis_date - pd.Timedelta(days=OFFER_TO_ONBOARD_GRACE_DAYS)
+        df["is_onboard"] = df["actual_onboard_date"].notna() & (df["actual_onboard_date"] <= analysis_date)
+        has_expected_onboard = df["expected_onboard_date"].notna()
+        df["offer_onboard_matured"] = df["is_onboard"] | (
+            has_expected_onboard & (df["expected_onboard_date"] <= analysis_date)
+        ) | (
+            ~has_expected_onboard & df["actual_onboard_date"].isna() & (df["offer_date"] <= onboard_mature_cutoff)
+        )
+        df["is_paid"] = df["paid_amount"] > 0
+        df["is_offer_reserve"] = df["invoice_status"].isin(["Invoice Added", "Sent"])
+        return df
 
     @staticmethod
     def _offer_outcome_group(df: pd.DataFrame, keys: list) -> pd.DataFrame:

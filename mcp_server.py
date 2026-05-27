@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import hmac
 import os
+import copy
+import threading
+import time
 from contextlib import contextmanager
 from datetime import date
 from typing import Any, Iterator
@@ -33,6 +36,11 @@ MCP_HOST = os.getenv("RECRUITER_FINANCE_MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("RECRUITER_FINANCE_MCP_PORT", "8765"))
 MCP_PUBLIC_BASE_URL = os.getenv("RECRUITER_FINANCE_MCP_PUBLIC_URL", f"http://localhost:{MCP_PORT}")
 READ_SCOPE = "finance:read"
+CACHE_TTL_SECONDS = int(os.getenv("RECRUITER_FINANCE_MCP_CACHE_TTL", "600"))
+DEFAULT_EVIDENCE_LIMIT = 10
+MAX_EVIDENCE_LIMIT = 30
+_DATA_CACHE: dict[tuple[str, ...], tuple[float, Any]] = {}
+_DATA_CACHE_LOCK = threading.RLock()
 
 
 class StaticBearerVerifier(TokenVerifier):
@@ -50,7 +58,10 @@ mcp = FastMCP(
     instructions=(
         "Read-only operational data tools for the Recruiter Finance Tool. "
         "Use evidence returned by these tools before concluding about cashflow, "
-        "consultant performance, forecast or OKR completion."
+        "consultant performance, forecast or OKR completion. Minimize tool calls: "
+        "start with the tool most specific to the user's question, never call "
+        "get_consultant_review for all consultants, and request detail evidence "
+        "only when the user needs record-level verification."
     ),
     host=MCP_HOST,
     port=MCP_PORT,
@@ -74,6 +85,34 @@ def _data_service() -> Iterator[V2DataService]:
         yield V2DataService(db)
     finally:
         db.close()
+
+
+def _load_datasets(*requests: tuple[str, tuple[object, ...]]) -> list[Any]:
+    """Load cached datasets and prepare uncached ones in one DB/SSH session."""
+    now = time.monotonic()
+    with _DATA_CACHE_LOCK:
+        keys = [(method, *(str(arg) for arg in args)) for method, args in requests]
+        missing: list[tuple[tuple[str, ...], str, tuple[object, ...]]] = []
+        missing_keys: set[tuple[str, ...]] = set()
+        for key, (method, args) in zip(keys, requests):
+            if key in missing_keys:
+                continue
+            if key not in _DATA_CACHE or _DATA_CACHE[key][0] <= now:
+                missing.append((key, method, args))
+                missing_keys.add(key)
+        if missing:
+            with _data_service() as service:
+                for key, method, args in missing:
+                    _DATA_CACHE[key] = (
+                        time.monotonic() + CACHE_TTL_SECONDS,
+                        getattr(service, method)(*args),
+                    )
+        return [copy.deepcopy(_DATA_CACHE[key][1]) for key in keys]
+
+
+def _load_dataset(method: str, *args: object) -> Any:
+    """Load one normalized dataset through the short-lived conversation cache."""
+    return _load_datasets((method, args))[0]
 
 
 def _today() -> str:
@@ -128,6 +167,10 @@ def _filter_consultant(df: pd.DataFrame, consultant: str) -> pd.DataFrame:
     return df[_name_match(df["consultant"], consultant)].copy()
 
 
+def _evidence_limit(value: int) -> int:
+    return max(1, min(int(value or DEFAULT_EVIDENCE_LIMIT), MAX_EVIDENCE_LIMIT))
+
+
 @mcp.tool()
 def get_metric_definitions() -> dict[str, Any]:
     """List supported execution-review metrics and their target units."""
@@ -154,8 +197,7 @@ def get_company_stage_metrics(end_date: str | None = None, forecast_days: int = 
     """Return fiscal-year Offer, Invoice, Collection and Forecast summaries."""
     end = _date_or_default(end_date, _today())
     start = _fiscal_start(end)
-    with _data_service() as service:
-        result = service.load_fiscal_ytd_metrics(start, end, int(forecast_days))
+    result = _load_dataset("load_fiscal_ytd_metrics", start, end, int(forecast_days), True)
     return {
         "period": {"start_date": start, "end_date": end, "forecast_days": int(forecast_days)},
         "accounting_note": (
@@ -173,31 +215,54 @@ def get_consultant_review(
     start_date: str | None = None,
     end_date: str | None = None,
     forecast_days: int = 180,
+    include_evidence: bool = False,
+    evidence_limit: int = DEFAULT_EVIDENCE_LIMIT,
 ) -> dict[str, Any]:
     """Return one consultant's process, performance reserve, collection, forecast and cost evidence."""
+    consultant_key = " ".join(str(consultant or "").strip().lower().split())
+    if consultant_key in {"", "all", "company", "全部", "所有", "全体"}:
+        return {
+            "status": "consultant_required",
+            "message": (
+                "This tool reviews one named consultant only. Use get_company_stage_metrics "
+                "for company totals, or call this tool once for the consultant requested by the user."
+            ),
+        }
     end = _date_or_default(end_date, _today())
     start = _date_or_default(start_date, _fiscal_start(end))
-    with _data_service() as service:
-        process = _filter_consultant(service.load_process_data(start, end), consultant)
-        collection = _filter_consultant(service.load_collection_data(start, end), consultant)
-        forecast = _filter_consultant(service.load_forecast_data(end, int(forecast_days)), consultant)
-        outcomes = service.load_offer_outcome_metrics(start, end)
-        outcome_detail = _filter_consultant(outcomes.get("detail", pd.DataFrame()), consultant)
-        consultants = service.load_consultants()
-        fiscal_collection = service.load_collection_data(_fiscal_start(end), end)
+    consultants = _load_dataset("load_consultants")
+    consultant_rows = _filter_consultant(consultants, consultant)
+    if consultant_rows.empty or "consultant_id" not in consultant_rows.columns:
+        return {"status": "not_found", "consultant": consultant, "message": "No matching consultant was found."}
+    consultant_row = consultant_rows.iloc[[0]].copy()
+    user_id = int(consultant_row.iloc[0]["consultant_id"])
+    (
+        process,
+        collection,
+        forecast,
+        outcome_detail,
+        fiscal_collection,
+    ) = _load_datasets(
+        ("load_consultant_process_data", (user_id, start, end)),
+        ("load_consultant_collection_data", (user_id, start, end)),
+        ("load_consultant_forecast_data", (user_id, end, int(forecast_days))),
+        ("load_consultant_offer_outcome_detail", (user_id, start, end)),
+        ("load_consultant_collection_data", (user_id, _fiscal_start(end), end)),
+    )
 
     pipeline = PipelineAnalyzer().analyze(forecast, days=int(forecast_days), analysis_date=end)
     salary_df = load_salary_df()
     cost_row: list[dict[str, Any]] = []
     if salary_df is not None and not salary_df.empty:
-        cost = CostEfficiencyAnalyzer().analyze(consultants, fiscal_collection, salary_df)
+        cost = CostEfficiencyAnalyzer().analyze(consultant_row, fiscal_collection, salary_df)
         ranking = cost.get("ranking", pd.DataFrame())
-        cost_row = _frame(_filter_consultant(ranking, consultant), limit=1)
+        cost_row = _frame(ranking, limit=1)
 
     referral_count = int(process["jobsubmission_id"].nunique()) if "jobsubmission_id" in process else 0
     interview_count = int(process["first_interview_date"].notna().sum()) if "first_interview_date" in process else 0
     offer_count = int(process["offer_date"].notna().sum()) if "offer_date" in process else 0
-    return {
+    result = {
+        "status": "ok",
         "consultant": consultant,
         "period": {"start_date": start, "end_date": end, "forecast_days": int(forecast_days)},
         "summary": {
@@ -212,10 +277,22 @@ def get_consultant_review(
             ),
         },
         "cost_scorecard": cost_row,
-        "process_evidence": _frame(process, limit=30),
-        "offer_collection_evidence": _frame(outcome_detail, limit=30),
-        "forecast_evidence": _frame(forecast, limit=30),
+        "evidence_available": {
+            "process_rows": len(process),
+            "offer_collection_rows": len(outcome_detail),
+            "forecast_rows": len(forecast),
+        },
     }
+    if include_evidence:
+        limit = _evidence_limit(evidence_limit)
+        result.update(
+            {
+                "process_evidence": _frame(process, limit=limit),
+                "offer_collection_evidence": _frame(outcome_detail, limit=limit),
+                "forecast_evidence": _frame(forecast, limit=limit),
+            }
+        )
+    return result
 
 
 @mcp.tool()
@@ -223,24 +300,28 @@ def get_forecast_pipeline(
     analysis_date: str | None = None,
     forecast_days: int = 180,
     consultant: str | None = None,
+    include_evidence: bool = False,
+    evidence_limit: int = DEFAULT_EVIDENCE_LIMIT,
 ) -> dict[str, Any]:
     """Return live forecast including overdue pipeline instead of restricting to current-year creation."""
     end = _date_or_default(analysis_date, _today())
-    with _data_service() as service:
-        forecast = service.load_forecast_data(end, int(forecast_days))
+    forecast = _load_dataset("load_forecast_data", end, int(forecast_days))
     if consultant:
         forecast = _filter_consultant(forecast, consultant)
     result = PipelineAnalyzer().analyze(forecast, days=int(forecast_days), analysis_date=end)
-    return {
+    response = {
         "analysis_date": end,
         "forecast_days": int(forecast_days),
         "consultant": consultant or "Company",
         "rule": "Live forecast is evaluated by current stage; overdue active forecast remains included.",
         "summary": _clean(result.get("summary", {})),
         "by_stage": _frame(result.get("by_stage", pd.DataFrame())),
-        "by_consultant": _frame(result.get("by_consultant", pd.DataFrame())),
-        "evidence": _frame(forecast, limit=50),
+        "by_consultant": _frame(result.get("by_consultant", pd.DataFrame()), limit=20),
+        "evidence_available": {"forecast_rows": len(forecast)},
     }
+    if include_evidence:
+        response["evidence"] = _frame(forecast, limit=_evidence_limit(evidence_limit))
+    return response
 
 
 @mcp.tool()
@@ -251,13 +332,16 @@ def get_receivables_cashflow(
     monthly_cost: float = 0,
     forecast_days: int = 180,
     client_name: str | None = None,
+    include_evidence: bool = False,
+    evidence_limit: int = DEFAULT_EVIDENCE_LIMIT,
 ) -> dict[str, Any]:
     """Return open receivables, overdue evidence, contractual terms and projected cash nodes."""
     end = _date_or_default(end_date, _today())
     start = _date_or_default(start_date, _fiscal_start(end))
-    with _data_service() as service:
-        invoices = service.load_cashflow_invoices(start, end)
-        forecast = service.load_forecast_data(end, int(forecast_days))
+    invoices, forecast = _load_datasets(
+        ("load_cashflow_invoices", (start, end)),
+        ("load_forecast_data", (end, int(forecast_days))),
+    )
     if client_name and not invoices.empty and "client_name" in invoices.columns:
         invoices = invoices[_name_match(invoices["client_name"], client_name)].copy()
     result = CashFlowAnalyzer().analyze(
@@ -268,13 +352,22 @@ def get_receivables_cashflow(
         analysis_date=end,
         days=int(forecast_days),
     )
-    return {
+    response = {
         "period": {"start_date": start, "end_date": end, "forecast_days": int(forecast_days)},
         "client_name": client_name or "All Clients",
         "summary": _clean(result.get("summary", {})),
-        "overdue_orders": _frame(result.get("overdue_orders", pd.DataFrame()), limit=50),
-        "client_payment_terms": _frame(result.get("client_payment_terms", pd.DataFrame()), limit=50),
+        "evidence_available": {
+            "overdue_rows": len(result.get("overdue_orders", pd.DataFrame())),
+            "client_payment_terms_rows": len(result.get("client_payment_terms", pd.DataFrame())),
+        },
     }
+    if include_evidence:
+        limit = _evidence_limit(evidence_limit)
+        response["overdue_orders"] = _frame(result.get("overdue_orders", pd.DataFrame()), limit=limit)
+        response["client_payment_terms"] = _frame(
+            result.get("client_payment_terms", pd.DataFrame()), limit=limit
+        )
+    return response
 
 
 @mcp.tool()
@@ -289,12 +382,13 @@ def review_execution_metric(
     """Check one consultant KPI against source data and return evidence without saving a task."""
     if metric_key not in METRIC_DEFINITIONS:
         raise ValueError(f"Unsupported metric_key: {metric_key}")
-    with _data_service() as service:
-        process = service.load_process_data(period_start, period_end)
-        collection = service.load_collection_data(period_start, period_end)
-        forecast = service.load_forecast_data(period_end, 180)
-        outcomes = service.load_offer_outcome_metrics(period_start, period_end)
-        additions = service.load_project_additions(period_start, period_end)
+    process, collection, forecast, outcomes, additions = _load_datasets(
+        ("load_process_data", (period_start, period_end)),
+        ("load_collection_data", (period_start, period_end)),
+        ("load_forecast_data", (period_end, 180)),
+        ("load_offer_outcome_metrics", (period_start, period_end)),
+        ("load_project_additions", (period_start, period_end)),
+    )
     context = {
         "active_process_df": process,
         "collection_df": collection,
@@ -316,7 +410,7 @@ def review_execution_metric(
     return {
         "task": task,
         "result": _clean(result),
-        "evidence": _frame(evidence, limit=50),
+        "evidence": _frame(evidence, limit=DEFAULT_EVIDENCE_LIMIT),
         "rule": "Read-only validation; this call does not create or modify an execution-followup task.",
     }
 

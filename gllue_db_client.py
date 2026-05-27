@@ -7,12 +7,16 @@ Gllue 数据库直连客户端
 2. SSH 隧道：远程连接时使用（通过 paramiko 执行 SQL）
 """
 
-import pandas as pd
-from datetime import datetime
-from typing import Optional, Dict, List
-from dataclasses import dataclass, field
-from io import StringIO
+import select
+import socketserver
+import threading
 import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from io import StringIO
+from typing import Optional, Dict, List
+
+import pandas as pd
 
 
 @dataclass
@@ -36,6 +40,40 @@ class GllueDBConfig:
     ssh_retries: int = 2
 
 
+class _ThreadingForwardServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+class _ForwardHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        try:
+            channel = self.server.ssh_transport.open_channel(
+                "direct-tcpip",
+                self.server.remote_address,
+                self.request.getpeername(),
+            )
+        except Exception:
+            return
+        if channel is None:
+            return
+        try:
+            while True:
+                readable, _, _ = select.select([self.request, channel], [], [], 1.0)
+                if self.request in readable:
+                    data = self.request.recv(65536)
+                    if not data:
+                        break
+                    channel.sendall(data)
+                if channel in readable:
+                    data = channel.recv(65536)
+                    if not data:
+                        break
+                    self.request.sendall(data)
+        finally:
+            channel.close()
+
+
 class GllueDBClient:
     """Gllue 数据库直连客户端"""
     
@@ -44,18 +82,36 @@ class GllueDBClient:
         self._engine = None
         self._ssh_client = None
         self._ssh_connected = False
+        self._tunnel_server = None
+        self._tunnel_thread = None
+        self._tunnel_failed = False
     
     def _get_engine(self):
         """获取 SQLAlchemy engine（懒加载）"""
         if self._engine is None:
             if self.config.db_type == "mysql":
-                from sqlalchemy import create_engine
-                conn_str = (
-                    f"mysql+pymysql://{self.config.username}:{self.config.password}"
-                    f"@{self.config.host}:{self.config.port}/{self.config.database}"
-                    f"?charset=utf8mb4"
+                from sqlalchemy import URL, create_engine
+                host = self.config.host
+                port = int(self.config.port)
+                if self.config.use_ssh:
+                    host, port = self._ensure_ssh_tunnel()
+                conn_url = URL.create(
+                    "mysql+pymysql",
+                    username=self.config.username,
+                    password=self.config.password,
+                    host=host,
+                    port=port,
+                    database=self.config.database,
+                    query={"charset": "utf8mb4"},
                 )
-                self._engine = create_engine(conn_str, pool_pre_ping=True)
+                self._engine = create_engine(
+                    conn_url,
+                    pool_pre_ping=True,
+                    pool_recycle=300,
+                    pool_size=3,
+                    max_overflow=2,
+                    connect_args={"connect_timeout": 20},
+                )
             elif self.config.db_type == "postgresql":
                 from sqlalchemy import create_engine
                 conn_str = (
@@ -66,10 +122,27 @@ class GllueDBClient:
             else:
                 raise ValueError(f"不支持的数据库类型: {self.config.db_type}")
         return self._engine
+
+    def _ensure_ssh_tunnel(self) -> tuple[str, int]:
+        """Forward the remote database port once and reuse local SQL connections."""
+        if self._tunnel_server is not None:
+            return self._tunnel_server.server_address
+        transport = self._get_ssh_client().get_transport()
+        if transport is None or not transport.is_active():
+            raise RuntimeError("SSH transport is unavailable for MySQL port forwarding.")
+        server = _ThreadingForwardServer(("127.0.0.1", 0), _ForwardHandler)
+        server.ssh_transport = transport
+        server.remote_address = (self.config.host or "127.0.0.1", int(self.config.port or 3306))
+        thread = threading.Thread(target=server.serve_forever, name="gllue-ssh-tunnel", daemon=True)
+        thread.start()
+        self._tunnel_server = server
+        self._tunnel_thread = thread
+        return server.server_address
     
     def _get_ssh_client(self):
         """获取或创建 SSH 连接（复用连接）"""
-        if self._ssh_client is None or not self._ssh_connected:
+        transport = self._ssh_client.get_transport() if self._ssh_client is not None else None
+        if self._ssh_client is None or not self._ssh_connected or transport is None or not transport.is_active():
             import paramiko
             last_error = None
             retries = max(int(self.config.ssh_retries or 1), 1)
@@ -112,12 +185,21 @@ class GllueDBClient:
     
     def query(self, sql: str, params: Optional[Dict] = None) -> pd.DataFrame:
         """执行 SQL 查询并返回 DataFrame"""
-        if self.config.use_ssh:
-            return self._query_via_ssh(sql)
-        engine = self._get_engine()
-        return pd.read_sql(sql, engine, params=params)
+        if self.config.use_ssh and self._tunnel_failed:
+            return self._query_via_ssh_command(sql)
+        try:
+            engine = self._get_engine()
+            return pd.read_sql(sql, engine, params=params)
+        except Exception:
+            if not self.config.use_ssh:
+                raise
+            # Preserve read access when an SSH server allows commands but
+            # refuses direct-tcpip forwarding.
+            self._tunnel_failed = True
+            self._dispose_tunnel_engine()
+            return self._query_via_ssh_command(sql)
     
-    def _query_via_ssh(self, sql: str) -> pd.DataFrame:
+    def _query_via_ssh_command(self, sql: str) -> pd.DataFrame:
         """通过 SSH 执行 SQL 查询（复用 SSH 连接）"""
         import uuid
         
@@ -154,28 +236,30 @@ class GllueDBClient:
         
         df = pd.read_csv(StringIO(out), sep='\t', engine='python', on_bad_lines='skip')
         return df
+
+    def _dispose_tunnel_engine(self):
+        if self._engine:
+            self._engine.dispose()
+            self._engine = None
+        if self._tunnel_server:
+            self._tunnel_server.shutdown()
+            self._tunnel_server.server_close()
+            self._tunnel_server = None
+            self._tunnel_thread = None
     
     def close(self):
         """关闭连接"""
+        self._dispose_tunnel_engine()
         if self._ssh_client and self._ssh_connected:
             self._ssh_client.close()
             self._ssh_connected = False
             self._ssh_client = None
-        if self._engine:
-            self._engine.dispose()
-            self._engine = None
     
     def test_connection(self) -> bool:
         """测试数据库连接"""
         try:
-            if self.config.use_ssh:
-                df = self._query_via_ssh("SELECT 1 AS connected")
-                return not df.empty and df.iloc[0, 0] == 1
-            else:
-                engine = self._get_engine()
-                with engine.connect() as conn:
-                    result = conn.execute("SELECT 1")
-                    return result.scalar() == 1
+            df = self.query("SELECT 1 AS connected")
+            return not df.empty and df.iloc[0, 0] == 1
         except Exception as e:
             print(f"Connection test failed: {e}")
             return False
@@ -183,20 +267,11 @@ class GllueDBClient:
     def test_connection_and_tables(self) -> tuple:
         """测试连接并返回表数量"""
         try:
-            if self.config.use_ssh:
-                df = self._query_via_ssh("SELECT 1 AS connected")
-                if df.empty or df.iloc[0, 0] != 1:
-                    return False, 0
-                tables = self._query_via_ssh("SHOW TABLES")
-                return True, len(tables)
-            else:
-                engine = self._get_engine()
-                with engine.connect() as conn:
-                    result = conn.execute("SELECT 1")
-                    if result.scalar() != 1:
-                        return False, 0
-                    tables = pd.read_sql("SHOW TABLES", engine)
-                    return True, len(tables)
+            df = self.query("SELECT 1 AS connected")
+            if df.empty or df.iloc[0, 0] != 1:
+                return False, 0
+            tables = self.query("SHOW TABLES")
+            return True, len(tables)
         except Exception as e:
             print(f"Connection test failed: {e}")
             return False, 0

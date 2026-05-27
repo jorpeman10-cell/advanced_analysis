@@ -10,6 +10,7 @@ from __future__ import annotations
 import hmac
 import os
 import copy
+import atexit
 import threading
 import time
 from contextlib import contextmanager
@@ -41,6 +42,8 @@ DEFAULT_EVIDENCE_LIMIT = 10
 MAX_EVIDENCE_LIMIT = 30
 _DATA_CACHE: dict[tuple[str, ...], tuple[float, Any]] = {}
 _DATA_CACHE_LOCK = threading.RLock()
+_SHARED_DB_CLIENT: GllueDBClient | None = None
+_SHARED_DATA_SERVICE: V2DataService | None = None
 
 
 class StaticBearerVerifier(TokenVerifier):
@@ -78,13 +81,24 @@ mcp = FastMCP(
 
 @contextmanager
 def _data_service() -> Iterator[V2DataService]:
+    global _SHARED_DB_CLIENT, _SHARED_DATA_SERVICE
     if not db_config_manager.has_config():
         raise RuntimeError("Gllue database configuration is missing for the MCP server.")
-    db = GllueDBClient(db_config_manager.get_gllue_db_config())
-    try:
-        yield V2DataService(db)
-    finally:
-        db.close()
+    if _SHARED_DATA_SERVICE is None:
+        _SHARED_DB_CLIENT = GllueDBClient(db_config_manager.get_gllue_db_config())
+        _SHARED_DATA_SERVICE = V2DataService(_SHARED_DB_CLIENT)
+    yield _SHARED_DATA_SERVICE
+
+
+def _close_shared_data_service() -> None:
+    global _SHARED_DB_CLIENT, _SHARED_DATA_SERVICE
+    if _SHARED_DB_CLIENT is not None:
+        _SHARED_DB_CLIENT.close()
+    _SHARED_DB_CLIENT = None
+    _SHARED_DATA_SERVICE = None
+
+
+atexit.register(_close_shared_data_service)
 
 
 def _load_datasets(*requests: tuple[str, tuple[object, ...]]) -> list[Any]:

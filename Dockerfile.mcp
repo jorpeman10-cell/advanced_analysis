@@ -1,0 +1,18 @@
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    RECRUITER_FINANCE_MCP_HOST=0.0.0.0 \
+    RECRUITER_FINANCE_MCP_PORT=8765
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -r requirements.txt
+
+COPY . .
+
+EXPOSE 8765
+
+CMD ["python", "mcp_server.py"]

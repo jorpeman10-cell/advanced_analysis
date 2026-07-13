@@ -1,6 +1,6 @@
 ---
 name: recruiter-finance-analysis
-description: "Use this skill for Recruiter Finance Tool analysis, metric definitions, cashflow, forecast, consultant performance, Offer Invoice Collection stage review, OKR execution follow-up, data anomaly review, and Lobe integration planning."
+description: "Use this skill for Recruiter Finance Tool analysis, metric definitions, cashflow, forecast, consultant performance, Offer Invoice Collection stage review, OKR execution follow-up, data anomaly review, Talent Mapping Obsidian wiki export, and Lobe integration planning."
 ---
 
 # Recruiter Finance Analysis
@@ -17,6 +17,7 @@ Keep answers grounded in the tool's field definitions, business stage logic, cas
    - Data anomaly review or reconciliation.
    - Management diagnosis for cashflow, client structure, pipeline, consultant cost, or conversion.
    - OKR / execution follow-up design.
+   - Talent Mapping / Obsidian wiki export from Gllue candidate and Mapping data.
    - Deployment, configuration, or Lobe integration.
 2. Read only the reference needed for that request:
    - Read [references/tool-map.md](references/tool-map.md) for dashboard areas, business logic, metrics, and review guardrails.
@@ -114,3 +115,5 @@ For OKR work, answer in this order:
 This skill captures the tool's operating knowledge and analysis workflow.
 It does not by itself grant a Lobe agent live access to the Streamlit app or database.
 When the user requests live querying from Lobe, follow [references/integration.md](references/integration.md) and propose a read-only API, MCP server, or an approved browser/tool path.
+
+When the user asks to create or refresh an Obsidian-style headhunting Talent Mapping knowledge base, use the MCP tool `export_talent_mapping_obsidian_vault` if available. Treat it as a one-way local export: it reads Gllue data, writes Markdown notes into the local vault directory, and does not update Gllue records. After the export, tell the user to open the returned `output_vault_path` in Obsidian with `Open folder as vault`.

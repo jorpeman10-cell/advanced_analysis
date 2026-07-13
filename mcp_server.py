@@ -15,6 +15,7 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import date
+from pathlib import Path
 from typing import Any, Iterator
 
 import pandas as pd
@@ -31,6 +32,8 @@ from modules.execution_followup import METRIC_DEFINITIONS, check_task, evidence_
 from modules.pipeline_analyzer import PipelineAnalyzer
 from modules.salary_store import load_salary_df
 from modules.v2_data_service import V2DataService
+from talent_mapping_obsidian_exporter import DEFAULT_OUTPUT as TALENT_MAPPING_DEFAULT_OUTPUT
+from talent_mapping_obsidian_exporter import export_vault
 
 
 MCP_HOST = os.getenv("RECRUITER_FINANCE_MCP_HOST", "0.0.0.0")
@@ -40,6 +43,14 @@ READ_SCOPE = "finance:read"
 CACHE_TTL_SECONDS = int(os.getenv("RECRUITER_FINANCE_MCP_CACHE_TTL", "600"))
 DEFAULT_EVIDENCE_LIMIT = 10
 MAX_EVIDENCE_LIMIT = 30
+MAX_TALENT_CANDIDATE_EXPORT = 1000
+MAX_TALENT_MAPPING_EXPORT = 300
+LOBE_TALENT_MAPPING_OUTPUT = Path(
+    os.getenv(
+        "TALENT_MAPPING_OBSIDIAN_OUTPUT",
+        str(TALENT_MAPPING_DEFAULT_OUTPUT.parent / "talent_mapping_vault_lobe"),
+    )
+)
 _DATA_CACHE: dict[tuple[str, ...], tuple[float, Any]] = {}
 _DATA_CACHE_LOCK = threading.RLock()
 _SHARED_DB_CLIENT: GllueDBClient | None = None
@@ -183,6 +194,36 @@ def _filter_consultant(df: pd.DataFrame, consultant: str) -> pd.DataFrame:
 
 def _evidence_limit(value: int) -> int:
     return max(1, min(int(value or DEFAULT_EVIDENCE_LIMIT), MAX_EVIDENCE_LIMIT))
+
+
+def _client_key(df: pd.DataFrame) -> pd.Series:
+    if df is None or df.empty or "client_name" not in df.columns:
+        return pd.Series(dtype=str)
+    return df["client_name"].fillna("(No Client)").astype(str).str.strip().replace("", "(No Client)")
+
+
+def _client_metric_frame(df: pd.DataFrame, aggregations: dict[str, tuple[str, str]]) -> pd.DataFrame:
+    if df is None or df.empty or "client_name" not in df.columns:
+        return pd.DataFrame()
+    work = df.copy()
+    work["client_name"] = _client_key(work)
+    grouped = work.groupby("client_name", dropna=False).agg(**aggregations).reset_index()
+    return grouped
+
+
+def _merge_client_frames(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    merged = pd.DataFrame()
+    for frame in frames:
+        if frame is None or frame.empty:
+            continue
+        merged = frame.copy() if merged.empty else merged.merge(frame, on="client_name", how="outer")
+    if merged.empty:
+        return merged
+    merged["client_name"] = merged["client_name"].fillna("(No Client)")
+    for col in merged.columns:
+        if col != "client_name":
+            merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0)
+    return merged
 
 
 @mcp.tool()
@@ -339,6 +380,197 @@ def get_forecast_pipeline(
 
 
 @mcp.tool()
+def get_client_company_performance(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    forecast_days: int = 180,
+    client_name: str | None = None,
+    limit: int = 20,
+    include_evidence: bool = False,
+    evidence_limit: int = DEFAULT_EVIDENCE_LIMIT,
+) -> dict[str, Any]:
+    """Return customer-company performance, project progress, receivables risk and live Pipeline by client."""
+    end = _date_or_default(end_date, _today())
+    start = _date_or_default(start_date, _fiscal_start(end))
+    (
+        process,
+        collection,
+        forecast,
+        invoices,
+        additions,
+    ) = _load_datasets(
+        ("load_process_data", (start, end)),
+        ("load_collection_data", (start, end)),
+        ("load_forecast_data", (end, int(forecast_days))),
+        ("load_cashflow_invoices", (start, end)),
+        ("load_project_additions", (start, end)),
+    )
+    additions_detail = additions.get("detail", pd.DataFrame()) if isinstance(additions, dict) else pd.DataFrame()
+
+    if client_name:
+        for name, frame in [
+            ("process", process),
+            ("collection", collection),
+            ("forecast", forecast),
+            ("invoices", invoices),
+            ("additions_detail", additions_detail),
+        ]:
+            if frame is not None and not frame.empty and "client_name" in frame.columns:
+                filtered = frame[_name_match(frame["client_name"], client_name)].copy()
+                if name == "process":
+                    process = filtered
+                elif name == "collection":
+                    collection = filtered
+                elif name == "forecast":
+                    forecast = filtered
+                elif name == "invoices":
+                    invoices = filtered
+                else:
+                    additions_detail = filtered
+
+    if process is not None and not process.empty:
+        process = process.copy()
+        process["is_first_interview_num"] = process.get("is_first_interview", False).astype(int)
+        process["is_offer_num"] = process.get("is_offer", False).astype(int)
+        process["is_onboard_num"] = process.get("is_onboard", False).astype(int)
+        process["fee_amount"] = pd.to_numeric(process.get("fee_amount"), errors="coerce").fillna(0)
+        process_frame = _client_metric_frame(
+            process,
+            {
+                "referral_count": ("jobsubmission_id", "nunique"),
+                "interview_count": ("is_first_interview_num", "sum"),
+                "offer_count": ("is_offer_num", "sum"),
+                "onboard_count": ("is_onboard_num", "sum"),
+                "offer_fee_amount": ("fee_amount", "sum"),
+            },
+        )
+    else:
+        process_frame = pd.DataFrame()
+
+    if collection is not None and not collection.empty:
+        collection = collection.copy()
+        collection["collection_amount"] = pd.to_numeric(collection.get("collection_amount"), errors="coerce").fillna(0)
+        collection_frame = _client_metric_frame(
+            collection,
+            {
+                "collection_count": ("invoice_id", "nunique"),
+                "collection_amount": ("collection_amount", "sum"),
+            },
+        )
+    else:
+        collection_frame = pd.DataFrame()
+
+    if forecast is not None and not forecast.empty:
+        forecast_company = forecast.drop_duplicates("forecast_id", keep="first").copy()
+        forecast_company["forecast_fee"] = pd.to_numeric(forecast_company.get("forecast_fee"), errors="coerce").fillna(0)
+        forecast_company["weighted_revenue"] = pd.to_numeric(forecast_company.get("weighted_revenue"), errors="coerce").fillna(0)
+        forecast_company["is_forecast_overdue_num"] = forecast_company.get("is_forecast_overdue", False).astype(int)
+        forecast_company["overdue_weighted_revenue"] = forecast_company["weighted_revenue"].where(
+            forecast_company["is_forecast_overdue_num"].astype(bool), 0
+        )
+        if "raw_days_to_close" in forecast_company.columns:
+            forecast_company["in_window_num"] = (
+                pd.to_numeric(forecast_company["raw_days_to_close"], errors="coerce").fillna(int(forecast_days) + 1)
+                <= int(forecast_days)
+            ).astype(int)
+        else:
+            forecast_company["in_window_num"] = 1
+        forecast_company["in_window_weighted_revenue"] = forecast_company["weighted_revenue"].where(
+            forecast_company["in_window_num"].astype(bool), 0
+        )
+        forecast_frame = _client_metric_frame(
+            forecast_company,
+            {
+                "pipeline_deal_count": ("forecast_id", "nunique"),
+                "pipeline_forecast_fee": ("forecast_fee", "sum"),
+                "pipeline_weighted_revenue": ("weighted_revenue", "sum"),
+                "pipeline_in_window_weighted_revenue": ("in_window_weighted_revenue", "sum"),
+                "pipeline_overdue_count": ("is_forecast_overdue_num", "sum"),
+                "pipeline_overdue_weighted_revenue": ("overdue_weighted_revenue", "sum"),
+            },
+        )
+    else:
+        forecast_frame = pd.DataFrame()
+
+    if invoices is not None and not invoices.empty:
+        invoices_result = CashFlowAnalyzer().analyze(
+            invoices,
+            initial_cash=0,
+            monthly_cost=0,
+            forecast_df=forecast,
+            analysis_date=end,
+            days=int(forecast_days),
+        )
+        client_risk = invoices_result.get("client_risk", pd.DataFrame())
+        invoice_frame = client_risk.rename(
+            columns={
+                "invoice_count": "open_invoice_count",
+                "pending_amount": "receivable_pending_amount",
+                "overdue_count": "receivable_overdue_count",
+                "max_overdue_days": "max_receivable_overdue_days",
+                "overdue_rate": "receivable_overdue_rate",
+                "risk_level": "receivable_risk_level",
+            }
+        )
+        invoice_frame = invoice_frame.drop(columns=["receivable_risk_level"], errors="ignore")
+    else:
+        invoice_frame = pd.DataFrame()
+
+    if additions_detail is not None and not additions_detail.empty:
+        additions_detail = additions_detail.copy()
+        additions_detail["is_live_num"] = additions_detail.get("is_live", False).astype(int)
+        additions_detail["has_offer_num"] = additions_detail.get("has_offer", False).astype(int)
+        additions_detail["offer_amount"] = pd.to_numeric(additions_detail.get("offer_amount"), errors="coerce").fillna(0)
+        additions_frame = _client_metric_frame(
+            additions_detail,
+            {
+                "new_project_count": ("joborder_id", "nunique"),
+                "live_project_count": ("is_live_num", "sum"),
+                "project_with_offer_count": ("has_offer_num", "sum"),
+                "project_offer_amount": ("offer_amount", "sum"),
+            },
+        )
+    else:
+        additions_frame = pd.DataFrame()
+
+    merged = _merge_client_frames([additions_frame, process_frame, collection_frame, forecast_frame, invoice_frame])
+    if not merged.empty:
+        for numerator, denominator, target in [
+            ("interview_count", "referral_count", "referral_to_interview_rate"),
+            ("offer_count", "referral_count", "referral_to_offer_rate"),
+            ("onboard_count", "offer_count", "offer_to_onboard_rate"),
+            ("project_with_offer_count", "new_project_count", "project_to_offer_rate"),
+        ]:
+            merged[target] = merged[numerator] / merged[denominator].replace(0, pd.NA) if numerator in merged and denominator in merged else 0
+        sort_col = "pipeline_weighted_revenue" if "pipeline_weighted_revenue" in merged.columns else "collection_amount"
+        merged = merged.sort_values(sort_col, ascending=False).head(max(1, min(int(limit or 20), 100)))
+
+    response = {
+        "period": {"start_date": start, "end_date": end, "forecast_days": int(forecast_days)},
+        "client_name": client_name or "All Clients",
+        "summary_by_client": _frame(merged, limit=max(1, min(int(limit or 20), 100))),
+        "evidence_available": {
+            "project_rows": len(additions_detail),
+            "process_rows": len(process),
+            "collection_rows": len(collection),
+            "forecast_rows": len(forecast),
+            "invoice_rows": len(invoices),
+        },
+        "rule": (
+            "Client rows combine project additions, process conversion, collection, open receivables "
+            "and live forecast. Pipeline amounts are source-document totals by forecast_id; consultant "
+            "collaboration splits remain available in consultant tools."
+        ),
+    }
+    if include_evidence:
+        ev_limit = _evidence_limit(evidence_limit)
+        response["project_evidence"] = _frame(additions_detail, limit=ev_limit)
+        response["pipeline_evidence"] = _frame(forecast, limit=ev_limit)
+        response["receivable_evidence"] = _frame(invoices, limit=ev_limit)
+    return response
+
+
+@mcp.tool()
 def get_receivables_cashflow(
     start_date: str | None = None,
     end_date: str | None = None,
@@ -426,6 +658,38 @@ def review_execution_metric(
         "result": _clean(result),
         "evidence": _frame(evidence, limit=DEFAULT_EVIDENCE_LIMIT),
         "rule": "Read-only validation; this call does not create or modify an execution-followup task.",
+    }
+
+
+@mcp.tool()
+def export_talent_mapping_obsidian_vault(
+    candidate_limit: int = 300,
+    mapping_limit: int = 80,
+) -> dict[str, Any]:
+    """Export Gllue candidate and Mapping data into a local Obsidian Markdown vault.
+
+    This is a one-way local export. It reads Gllue data and writes Markdown files
+    under the project directory; it does not modify Gllue records.
+    """
+    safe_candidate_limit = max(1, min(int(candidate_limit or 300), MAX_TALENT_CANDIDATE_EXPORT))
+    safe_mapping_limit = max(1, min(int(mapping_limit or 80), MAX_TALENT_MAPPING_EXPORT))
+    output = LOBE_TALENT_MAPPING_OUTPUT
+    export_vault(output, safe_candidate_limit, safe_mapping_limit)
+    return {
+        "status": "success",
+        "read_only_database": True,
+        "output_vault_path": str(output.resolve()),
+        "obsidian_open_action": "Obsidian -> Open folder as vault -> select output_vault_path",
+        "limits": {
+            "candidate_limit": safe_candidate_limit,
+            "mapping_limit": safe_mapping_limit,
+            "max_candidate_limit": MAX_TALENT_CANDIDATE_EXPORT,
+            "max_mapping_limit": MAX_TALENT_MAPPING_EXPORT,
+        },
+        "main_files": {
+            "index": str((output / "index.md").resolve()),
+            "log": str((output / "log.md").resolve()),
+        },
     }
 
 

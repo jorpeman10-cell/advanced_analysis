@@ -16,6 +16,7 @@ live Gllue evidence. It does not write tasks or change database records.
 | `get_forecast_pipeline` | Live and overdue Forecast review |
 | `get_receivables_cashflow` | Open invoices, overdue evidence and client payment terms |
 | `review_execution_metric` | Read-only completion check for one consultant target |
+| `export_talent_mapping_obsidian_vault` | Export Gllue candidates and Mapping data into a local Obsidian Markdown vault |
 
 ## Conversation Performance
 
@@ -24,6 +25,7 @@ live Gllue evidence. It does not write tasks or change database records.
 - Consultant, forecast, and receivable tools return summary data by default. Use `include_evidence=true` only for record-level checking.
 - `get_consultant_review` accepts one named consultant only. Use `get_company_stage_metrics` for company totals.
 - For an initial management answer, prefer no more than three targeted calls and expand evidence only if the user requests verification.
+- `export_talent_mapping_obsidian_vault` writes only to the local project vault directory and does not modify Gllue data. Use smaller limits for quick previews and larger limits for periodic refreshes.
 
 ## Local Setup
 
@@ -70,3 +72,29 @@ For a non-Docker Lobe client on the same machine, use
 
 Keep the endpoint local or place it behind HTTPS and access controls before
 using it outside the local computer.
+
+## Talent Mapping Obsidian Export
+
+After Lobe has the MCP connector enabled, ask it to call:
+
+```text
+export_talent_mapping_obsidian_vault
+```
+
+Typical prompt:
+
+```text
+请刷新 Obsidian 猎头 Mapping 知识库，候选人导出 300 条，Mapping 导出 80 张。
+```
+
+The tool returns `output_vault_path`. Open that folder in Obsidian with:
+
+```text
+Obsidian -> Open folder as vault
+```
+
+The default Lobe export path is:
+
+```text
+C:\Users\EDY\.kimi\advanced_analysis_publish\talent_mapping_vault_lobe
+```

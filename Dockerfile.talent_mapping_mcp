@@ -1,0 +1,16 @@
+FROM recruiter-finance-mcp:latest
+
+ENV PYTHONUNBUFFERED=1 \
+    TALENT_MAPPING_MCP_HOST=0.0.0.0 \
+    TALENT_MAPPING_MCP_PORT=8770 \
+    TALENT_MAPPING_OBSIDIAN_OUTPUT=/app/talent_mapping_vault
+
+WORKDIR /app
+
+COPY talent_mapping_mcp_server.py .
+COPY talent_mapping_obsidian_exporter.py .
+COPY skills/talent-mapping-llm/SKILL.md ./skills/talent-mapping-llm/SKILL.md
+
+EXPOSE 8770
+
+CMD ["python", "talent_mapping_mcp_server.py"]

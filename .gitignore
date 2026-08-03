@@ -18,6 +18,9 @@ report_requests.json
 alert_config.json
 auth_config.json
 
+# Runtime logs
+*.log
+
 # OS / IDE
 .DS_Store
 Thumbs.db

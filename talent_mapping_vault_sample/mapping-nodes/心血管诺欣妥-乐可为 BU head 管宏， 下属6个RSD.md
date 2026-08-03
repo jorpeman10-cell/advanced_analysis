@@ -1,0 +1,12 @@
+# 心血管诺欣妥/乐可为 BU head 管宏， 下属6个RSD
+
+## Type
+- mapping-nodes
+
+## Linked Records
+
+- [[mappings/诺华]]
+
+## Notes
+
+- 待结合访谈、简历、业绩数据继续编译。

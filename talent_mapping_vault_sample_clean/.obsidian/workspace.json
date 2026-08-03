@@ -1,0 +1,224 @@
+{
+  "main": {
+    "id": "9f909c317f1b1883",
+    "type": "split",
+    "children": [
+      {
+        "id": "7fc4588360c29113",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "6cb3d76d5e06b9eb",
+            "type": "leaf",
+            "state": {
+              "type": "graph",
+              "state": {},
+              "icon": "lucide-git-fork",
+              "title": "关系图谱"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "61f6a0e3e8723093",
+    "type": "split",
+    "children": [
+      {
+        "id": "07253fa5f88e12b8",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "66b966ab61ecffdf",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "文件列表"
+            }
+          },
+          {
+            "id": "793b914430d0d3f8",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "[\"updated\"]",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "搜索"
+            }
+          },
+          {
+            "id": "28c3ad74539fce14",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "书签"
+            }
+          }
+        ],
+        "currentTab": 1
+      }
+    ],
+    "direction": "horizontal",
+    "width": 295.5
+  },
+  "right": {
+    "id": "32537e64bd5d9d99",
+    "type": "split",
+    "children": [
+      {
+        "id": "e96432728582330f",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "001d0fd90f8f42c4",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "people/Cong LIU.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Cong LIU 的反向链接列表"
+            }
+          },
+          {
+            "id": "e541ff47fd148e8e",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "people/Cong LIU.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Cong LIU 的出链列表"
+            }
+          },
+          {
+            "id": "61fbfe58e8d00880",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "标签"
+            }
+          },
+          {
+            "id": "bd6fb303011bdc41",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "添加笔记属性"
+            }
+          },
+          {
+            "id": "dc747161f00b99c9",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "people/Cong LIU.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of Cong LIU"
+            }
+          }
+        ],
+        "currentTab": 3
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:打开快速切换": false,
+      "graph:查看关系图谱": false,
+      "canvas:新建白板": false,
+      "daily-notes:打开/创建今天的日记": false,
+      "templates:插入模板": false,
+      "command-palette:打开命令面板": false,
+      "bases:新建数据库": false,
+      "karpathywiki:Ingest current file": false
+    }
+  },
+  "active": "793b914430d0d3f8",
+  "lastOpenFiles": [
+    "mapping-nodes/Stan- 销售.md",
+    "mapping-nodes/丁伟-VP.md",
+    "wiki/log.md",
+    "wiki/index.md",
+    "wiki/entities/丁伟.md",
+    "wiki/entities/东区rsdrsm.md",
+    "wiki/sources/丁伟-vp.md",
+    "mapping-nodes/上海RSM-曹佳.md",
+    "mapping-nodes/邓招长.md",
+    "mappings/GES.md",
+    "mapping-nodes/chris 销售.md",
+    "people/Cong LIU.md",
+    "Untitled.canvas",
+    "log.md",
+    "未命名 2.canvas",
+    "未命名 1.canvas",
+    "index.md",
+    "Untitled.md",
+    "mappings/东区RSDRSM.md",
+    "wiki/schema/config.md",
+    "mapping-nodes/阿法替尼-张洁.md",
+    "mapping-nodes/？血液负责人-是豪，转创新事业部.md",
+    "consultants/Daisy Wang 王慧.md",
+    "mappings/卫材.md",
+    "mapping-nodes/信达生物- 技术创新部负责人；高级总监PD工艺负责人-丁兆丰.md",
+    "mappings/大分子CMC D-VP-CTO.md",
+    "mappings/诺华.md",
+    "mappings/Falcon SH BJ.md",
+    "Untitled.base",
+    "wiki/schema",
+    "wiki/sources",
+    "wiki/concepts",
+    "wiki/entities",
+    "wiki",
+    "mappings/恒瑞（上海工艺所）.md",
+    "consultants",
+    "未命名.canvas"
+  ]
+}

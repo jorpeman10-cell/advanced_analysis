@@ -1,0 +1,12 @@
+# Tony 曹天一 医学 （1+5）
+
+## Type
+- mapping-nodes
+
+## Linked Records
+
+- [[mappings/GES]]
+
+## Notes
+
+- 待结合访谈、简历、业绩数据继续编译。

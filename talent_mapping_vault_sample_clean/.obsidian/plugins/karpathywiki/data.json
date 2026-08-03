@@ -1,0 +1,30 @@
+{
+  "provider": "deepseek",
+  "apiKey": "sk-df3f351ceabe4eab90bafb354f74097a",
+  "baseUrl": "https://api.deepseek.com/v1",
+  "model": "deepseek-v4-pro",
+  "wikiFolder": "wiki",
+  "language": "en",
+  "wikiLanguage": "en",
+  "useCustomWikiLanguage": false,
+  "availableModels": [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro"
+  ],
+  "useCustomModel": false,
+  "maxConversationHistory": 30,
+  "queryHistory": [],
+  "enableSchema": true,
+  "extractionGranularity": "standard",
+  "autoWatchSources": false,
+  "autoWatchMode": "notify",
+  "autoWatchDebounceMs": 5000,
+  "watchedFolders": [],
+  "periodicLint": "off",
+  "startupCheck": true,
+  "pageGenerationConcurrency": 3,
+  "batchDelayMs": 500,
+  "lastOfferedQueryHash": "",
+  "llmReady": true,
+  "maxTokensPerCall": 0
+}

@@ -1,0 +1,12 @@
+# RSM-唐健-北一区
+
+## Type
+- mapping-nodes
+
+## Linked Records
+
+- [[mappings/卫材]]
+
+## Notes
+
+- 待结合访谈、简历、业绩数据继续编译。
